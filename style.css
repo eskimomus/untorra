@@ -1,0 +1,301 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  width: 100%;
+  height: 100%;
+  background: #0a0806;
+  overflow: hidden;
+  font-family: Georgia, 'Times New Roman', serif;
+  color: #e8dfc8;
+}
+
+#game {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  background: #000;
+}
+
+/* Fixed 4:3 stage, centered, letterboxed (black bars) on any other viewport
+   ratio. width/height each pick whichever of "the other axis at 4:3" or
+   "the full viewport on this axis" is smaller — the standard min()-based
+   contain-to-aspect-ratio technique, no flex/aspect-ratio auto-resolution
+   quirks to worry about. */
+#stage {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(100vw, 133.333vh);
+  height: min(100vh, 75vw);
+  overflow: hidden;
+}
+
+#scene-wrap {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.scene-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity 700ms ease;
+  pointer-events: none;
+}
+
+.scene-img.active {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+#vignette {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  box-shadow: inset 0 0 18vw 4vw rgba(0,0,0,0.75);
+  z-index: 5;
+}
+
+#grain {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.35) 100%);
+  z-index: 6;
+}
+
+/* Invisible full-screen click layer sampling each node's collider map by
+   pixel — sits above the scene but below individual .hotspot elements
+   (z-index 10), so an explicit hotspot (puzzle button, the final-scene
+   "continue" arrow) always wins a click over the collider beneath it. */
+#collider-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 9;
+  /* front by default (matches CURSOR_CSS.front in game.js) — updateColliderCursor()
+     overrides per-pixel on mousemove; this is just the value before the first move */
+  cursor: url("assets/cursors/front.png") 11 0, pointer;
+}
+
+#fade-overlay {
+  position: absolute;
+  inset: 0;
+  /* above title-screen/credits-screen (100) too — a full-screen fade needs
+     to cover the menu as well now that "new game" fades through it, not
+     just in-scene node-to-node transitions */
+  z-index: 150;
+  background: #000;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 800ms ease;
+}
+#fade-overlay.show { opacity: 1; }
+
+.hotspot {
+  position: absolute;
+  z-index: 10;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.hotspot-glow {
+  width: 3.4em;
+  height: 3.4em;
+  font-size: 16px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle, rgba(232,223,200,0.16) 0%, rgba(232,223,200,0.03) 60%, transparent 75%);
+  border: 1px solid rgba(232,223,200,0.28);
+  color: rgba(232,223,200,0.75);
+  font-size: 1.3em;
+  opacity: 0.55;
+  transform: scale(0.9);
+  transition: opacity 250ms ease, transform 250ms ease, background 250ms ease;
+}
+
+.hotspot:hover .hotspot-glow {
+  opacity: 1;
+  transform: scale(1.08);
+  background: radial-gradient(circle, rgba(232,223,200,0.30) 0%, rgba(232,223,200,0.08) 60%, transparent 78%);
+  border-color: rgba(232,223,200,0.6);
+}
+
+#tablo-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 8;
+}
+
+/* Occludes button glow behind the device strut in front of the cables 3 1
+   buttons — mask-size:cover fits the 640x480 mask the same way object-fit:cover
+   fits the scene <img> into the same box, so the two stay pixel-aligned. */
+#tablo-layer.cables-mask {
+  mask-image: url('assets/cables-glow-mask.png');
+  mask-size: cover;
+  mask-position: center;
+  mask-repeat: no-repeat;
+  -webkit-mask-image: url('assets/cables-glow-mask.png');
+  -webkit-mask-size: cover;
+  -webkit-mask-position: center;
+  -webkit-mask-repeat: no-repeat;
+}
+
+.tablo-glow {
+  position: absolute;
+  width: 9%;
+  height: 12%;
+  transform: translate(-50%, -50%);
+}
+.tablo-glow::before,
+.tablo-glow::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: url('assets/tablo-glow.png') center/contain no-repeat;
+  /* single warm-orange asset, retinted per button via hue-rotate — the tablo's
+     own glow never sets --glow-hue, so it falls back to 0deg (unchanged) */
+  filter: hue-rotate(var(--glow-hue, 0deg)) saturate(var(--glow-sat, 2.2));
+}
+.tablo-glow::before {
+  /* guarantees the glow reads even on near-black buttons in shadow, where
+     color-dodge alone barely moves a base pixel that's already close to 0 */
+  mix-blend-mode: screen;
+  opacity: 0.55;
+}
+.tablo-glow::after {
+  mix-blend-mode: color-dodge;
+}
+
+.play-glow {
+  position: absolute;
+  width: 10%;
+  height: 8%;
+  transform: translate(-50%, -50%);
+}
+.play-glow::before,
+.play-glow::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: url('assets/tablo-glow-triangle.png?v=2') center/contain no-repeat;
+}
+.play-glow::before {
+  mix-blend-mode: screen;
+  opacity: 0.55;
+}
+.play-glow::after {
+  mix-blend-mode: color-dodge;
+}
+
+/* terminal buttons (tablo/cables/tower grids) are fully invisible — no ring,
+   just the custom cursor over the clickable area */
+.hotspot.tablo-btn .hotspot-glow {
+  display: none;
+}
+
+/* same "invisible until interaction" treatment for a couple of one-off
+   explicit hotspots that aren't tablo-btn but still shouldn't show a ring
+   in any state — lift_2_1's panel-access hotspot, lift_panel's play button */
+.hotspot.no-glow .hotspot-glow {
+  display: none;
+}
+
+.hotspot.interact .hotspot-glow {
+  border-color: rgba(200,90,60,0.5);
+  color: rgba(230,170,120,0.9);
+}
+.hotspot.interact:hover .hotspot-glow {
+  background: radial-gradient(circle, rgba(200,90,60,0.30) 0%, rgba(200,90,60,0.08) 60%, transparent 78%);
+  border-color: rgba(230,140,90,0.75);
+}
+
+#title-screen, #credits-screen {
+  position: absolute;
+  inset: 0;
+  z-index: 100;
+  /* matches the collider-layer's "always show a custom cursor, never the
+     bare OS arrow" rule used during actual gameplay */
+  cursor: url("assets/cursors/front.png") 11 0, pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+#title-screen {
+  background: #000 url('assets/menu-bg.png') center/cover no-repeat;
+}
+#credits-screen {
+  background: #000;
+}
+#title-screen.hidden, #credits-screen.hidden { opacity: 0; pointer-events: none; }
+
+.menu-title {
+  position: absolute;
+  left: 10%;
+  top: 9%;
+}
+
+.menu-list {
+  position: absolute;
+  left: 10%;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+/* "new game" is the middle of the 3 evenly-spaced items, so centering the
+   whole block vertically keeps it pinned to the true vertical center of the
+   screen regardless of gap/font-size tweaks */
+#title-screen .menu-list {
+  top: 50%;
+  transform: translateY(-50%);
+}
+#credits-screen .menu-list {
+  top: 43%;
+}
+
+/* Menu text is pre-rendered at low resolution (assets/menu-text/) and
+   scaled back up without smoothing, instead of live browser type — matches
+   the chunky pixel-mosaic look used everywhere else in this game. Color
+   (active FFF2E9 / inactive 464646) is baked into each PNG, not CSS, since
+   it has to survive image-rendering:pixelated. */
+.menu-img {
+  display: block;
+  height: 24px;
+  width: auto;
+  image-rendering: pixelated;
+  image-rendering: -moz-crisp-edges;
+  image-rendering: crisp-edges;
+  -webkit-user-drag: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.menu-item {
+  /* explicit on every .menu-item, active or not (e.g. "continue" before a
+     game has started) — <button> has its own UA-stylesheet cursor default
+     that wins over simple inheritance from the parent, so relying on
+     inheriting the screen's front cursor doesn't actually work here */
+  cursor: url("assets/cursors/front.png") 11 0, pointer;
+  background: none;
+  border: none;
+  padding: 0;
+  text-align: left;
+  transition: filter 250ms ease;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.menu-item.active:hover {
+  filter: brightness(1.3);
+}
+#start-btn:hover {
+  background: rgba(232,223,200,0.12);
+  border-color: #fff;
+}
