@@ -1482,6 +1482,66 @@ function playEndingFromStart() {
 // path, and the ending theme restarts from the beginning with no fade-in.
 // 2s of plain darkness and silence between final_12 and the ending menu —
 // no fades either side of that gap, nothing audible during it either.
+// Mobile browsers (iOS Safari especially) aggressively suspend the shared
+// AudioContext on backgrounding, screen lock, or plain inactivity, and only
+// a real user gesture can resume it. Previously the only resume() call in
+// the whole game fired once, on the initial "new game" click — any later
+// suspension (locking the screen mid-play, backgrounding to check a
+// notification) left ambience/music silent for the rest of the session,
+// and made one-shot SFX look like the only thing "working" since those go
+// through separate <audio> elements outside this context entirely. Calling
+// this from every later gesture and on tab-foreground fixes that.
+function tryResumeAudio() {
+  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+}
+
+// One-shot SFX filenames that aren't reachable by walking node/collider data
+// (literals inlined at their playOneShot() call sites) — kept in sync by
+// hand with those call sites; see preloadAllAssets().
+const EXTRA_ONESHOT_FILES = [
+  'lever doesnt work.ogg', 'door open.ogg', 'door close.ogg', 'beep.ogg',
+  'elevator open.ogg', 'wires succes.ogg', 'elevator working.ogg',
+  'terminal note 1.ogg', 'terminal note 2.ogg', 'terminal note 3.ogg', 'terminal note 4.ogg'
+];
+
+// Render images and collider maps are normally fetched lazily, only as the
+// player actually navigates to a node — fine on a fast connection, but on
+// mobile it means a stall (or, per the reported bug, a silent gap) right as
+// a new scene/sound is needed. This walks every node across every
+// leverOpen x circuitGreen combination (the only two flags that affect
+// which image a node resolves to) plus every collider map and one-shot SFX
+// filename, and warms the browser cache for all of them up front.
+function preloadAllAssets() {
+  const imageUrls = new Set();
+  const soundFiles = new Set(EXTRA_ONESHOT_FILES);
+
+  const savedLever = state.leverOpen, savedGreen = state.circuitGreen;
+  for (const leverOpen of [false, true]) {
+    for (const circuitGreen of [false, true]) {
+      state.leverOpen = leverOpen;
+      state.circuitGreen = circuitGreen;
+      for (const key in nodes) {
+        const node = nodes[key];
+        if (node.image) imageUrls.add(resolve(node.image));
+        if (node.blinkImage) imageUrls.add(resolve(node.blinkImage));
+        if (node.rhythm) node.rhythm.sounds.forEach(f => soundFiles.add(f));
+        if (node.autoAdvance && node.autoAdvance.sound) soundFiles.add(node.autoAdvance.sound);
+      }
+    }
+  }
+  state.leverOpen = savedLever;
+  state.circuitGreen = savedGreen;
+
+  for (const key in COLLIDER_DATA) {
+    const cfg = COLLIDER_DATA[key];
+    ensureColliderLoaded(cfg.map);
+    cfg.actions.forEach(a => { if (a && a.sound) soundFiles.add(a.sound); });
+  }
+
+  imageUrls.forEach(url => { new Image().src = url; });
+  soundFiles.forEach(file => { fetch(sound(file)).catch(() => {}); });
+}
+
 const ENDING_DARK_MS = 2000;
 function openEndingMenu() {
   muteGameAudio(0); // instant — cancels/overrides whatever fade-out updateAmbience/updateMusic just scheduled at the top of this same render(), so nothing lingers audibly into the dark gap
@@ -1495,6 +1555,15 @@ function openEndingMenu() {
 function init() {
   initAmbientTracks();
   initMusicTracks();
+  preloadAllAssets();
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') tryResumeAudio();
+  });
+  ['pointerdown', 'touchstart', 'keydown'].forEach(evt => {
+    document.addEventListener(evt, tryResumeAudio);
+  });
+
   imgA = document.getElementById('img-a');
   imgB = document.getElementById('img-b');
   activeImg = imgA;
@@ -1524,7 +1593,7 @@ function init() {
   creditsBackBtn = document.getElementById('credits-back');
 
   newGameBtn.addEventListener('click', () => {
-    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+    tryResumeAudio();
     // fade to black, hold there, swap the menu for the actual game while
     // still hidden, then fade back in on hub — same fadeOverlay primitive
     // every other scripted transition uses (startAutoAdvance), just
