@@ -243,6 +243,18 @@ html, body {
   top: 9%;
 }
 
+/* Real logo art (photographic brushed-metal wordmark), not pre-rendered
+   pixel text like the rest of the menu — rendered smooth, not pixelated,
+   and sized independently of .menu-img's 24px button-label height. */
+.title-logo {
+  display: block;
+  height: 64px;
+  width: auto;
+  -webkit-user-drag: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
 .menu-list {
   position: absolute;
   left: 10%;
