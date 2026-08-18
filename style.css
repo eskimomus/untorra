@@ -243,13 +243,18 @@ html, body {
   top: 9%;
 }
 
-/* Real logo art (photographic brushed-metal wordmark), not pre-rendered
-   pixel text like the rest of the menu — rendered smooth, not pixelated,
-   and sized independently of .menu-img's 24px button-label height. */
+/* Photographic wordmark, degraded to match the chunky pixel-mosaic look
+   used everywhere else in the menu — same image-rendering treatment as
+   .menu-img, just sized independently since this isn't a pre-rendered
+   near-1:1 label like the others (the big scale-down ratio here is what
+   actually produces the blocky look, not the source asset itself). */
 .title-logo {
   display: block;
-  height: 64px;
+  height: 32px;
   width: auto;
+  image-rendering: pixelated;
+  image-rendering: -moz-crisp-edges;
+  image-rendering: crisp-edges;
   -webkit-user-drag: none;
   user-select: none;
   -webkit-user-select: none;
