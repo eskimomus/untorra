@@ -1542,6 +1542,37 @@ function preloadAllAssets() {
   soundFiles.forEach(file => { fetch(sound(file)).catch(() => {}); });
 }
 
+// Menu chrome (background, logo, button labels, cursors) is small but each
+// piece still paints independently the moment its own request finishes —
+// on a first visit that reads as the menu assembling itself piece by piece
+// rather than appearing at once. #title-screen starts at opacity:0 (see
+// style.css) and only gets revealed once every one of these has actually
+// finished loading (or failed — a broken image shouldn't hold the menu
+// hostage forever).
+const MENU_UI_IMAGES = [
+  'assets/menu-bg.png',
+  'assets/menu-text/title-untorra.png',
+  'assets/menu-text/item-continue-inactive.png',
+  'assets/menu-text/item-continue-active.png',
+  'assets/menu-text/item-newgame.png',
+  'assets/menu-text/item-credits.png',
+  'assets/menu-text/item-back.png',
+  'assets/menu-text/credits-body.png',
+  'assets/cursors/front.png',
+  'assets/cursors/back.png',
+  'assets/cursors/left.png',
+  'assets/cursors/right.png',
+  'assets/cursors/grab.png',
+];
+function preloadMenuImages() {
+  return Promise.all(MENU_UI_IMAGES.map(path => new Promise(resolve => {
+    const im = new Image();
+    im.onload = resolve;
+    im.onerror = resolve;
+    im.src = assetPath(path);
+  })));
+}
+
 const ENDING_DARK_MS = 2000;
 function openEndingMenu() {
   muteGameAudio(0); // instant — cancels/overrides whatever fade-out updateAmbience/updateMusic just scheduled at the top of this same render(), so nothing lingers audibly into the dark gap
@@ -1585,6 +1616,7 @@ function init() {
   });
 
   titleScreen = document.getElementById('title-screen');
+  preloadMenuImages().then(() => titleScreen.classList.add('assets-ready'));
   creditsScreen = document.getElementById('credits-screen');
   newGameBtn = document.getElementById('menu-newgame');
   continueBtn = document.getElementById('menu-continue');

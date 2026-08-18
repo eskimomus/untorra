@@ -231,10 +231,18 @@ html, body {
 }
 #title-screen {
   background: #000 url('assets/menu-bg.png') center/cover no-repeat;
+  /* stays invisible until game.js confirms every menu image (background,
+     logo, button labels, cursors) has actually finished loading, then adds
+     .assets-ready — avoids the background/logo/buttons popping in one at a
+     time as each file happens to finish downloading */
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 400ms ease;
 }
 #credits-screen {
   background: #000;
 }
+#title-screen.assets-ready:not(.hidden) { opacity: 1; pointer-events: auto; }
 #title-screen.hidden, #credits-screen.hidden { opacity: 0; pointer-events: none; }
 
 .menu-title {
