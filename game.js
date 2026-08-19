@@ -1037,7 +1037,7 @@ let blinkTimer = null;
 let rhythmTimers = [];
 let imgA, imgB, activeImg;
 let hotspotLayer, tabloLayer, colliderLayer, fadeOverlay, sceneWrap, vignetteEl;
-let titleScreen, creditsScreen, newGameBtn, continueBtn, continueImg, creditsBtn, creditsBackBtn;
+let titleScreen, creditsScreen, newGameBtn, continueBtn, continueImg, creditsBtn, creditsBackBtn, storeBtn;
 // true once "new game" has actually been pressed once — gates both the
 // "continue" menu item and whether Esc is allowed to pause into the menu
 // (nothing to pause into before a game exists)
@@ -1556,6 +1556,7 @@ const MENU_UI_IMAGES = [
   'assets/menu-text/item-continue-active.png',
   'assets/menu-text/item-newgame.png',
   'assets/menu-text/item-credits.png',
+  'assets/menu-text/item-store.png',
   'assets/menu-text/item-back.png',
   'assets/menu-text/credits-body.png',
   'assets/cursors/front.png',
@@ -1623,6 +1624,7 @@ function init() {
   continueImg = continueBtn.querySelector('img');
   creditsBtn = document.getElementById('menu-credits');
   creditsBackBtn = document.getElementById('credits-back');
+  storeBtn = document.getElementById('menu-store');
 
   newGameBtn.addEventListener('click', () => {
     tryResumeAudio();
@@ -1665,6 +1667,10 @@ function init() {
     creditsScreen.classList.add('hidden');
     titleScreen.classList.remove('hidden');
   });
+
+  // TODO: no physical-OST store URL yet — wire this once there's a real one
+  // (e.g. storeBtn.addEventListener('click', () => window.open(URL, '_blank')))
+  storeBtn.addEventListener('click', () => {});
 
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape' || !gameStarted) return;

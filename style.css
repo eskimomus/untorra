@@ -297,6 +297,23 @@ html, body {
   -webkit-user-select: none;
 }
 
+/* Multi-line composite (name credit + special-thanks paragraph), baked as
+   one image the same low-res pixel-mosaic way as .menu-img but with its own
+   height — the name line renders at a bigger source font-size than the
+   paragraph lines within the same file, so this can't just reuse .menu-img's
+   flat 24px. */
+.credits-body-img {
+  display: block;
+  height: 200px;
+  width: auto;
+  image-rendering: pixelated;
+  image-rendering: -moz-crisp-edges;
+  image-rendering: crisp-edges;
+  -webkit-user-drag: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
 .menu-item {
   /* explicit on every .menu-item, active or not (e.g. "continue" before a
      game has started) — <button> has its own UA-stylesheet cursor default
