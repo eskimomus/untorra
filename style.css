@@ -230,7 +230,7 @@ html, body {
   -webkit-user-select: none;
 }
 #title-screen {
-  background: #000 url('assets/menu-bg.png') center/cover no-repeat;
+  background: #000 url('assets/menu-bg.png?v=2') center/cover no-repeat;
   /* stays invisible until game.js confirms every menu image (background,
      logo, button labels, cursors) has actually finished loading, then adds
      .assets-ready — avoids the background/logo/buttons popping in one at a
