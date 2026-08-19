@@ -1559,23 +1559,30 @@ function preloadAllAssets() {
 // style.css) and only gets revealed once every one of these has actually
 // finished loading (or failed — a broken image shouldn't hold the menu
 // hostage forever).
+// Every URL here must match byte-for-byte (including the ?v= query) the
+// URL actually used elsewhere (index.html src=, or a JS .src= assignment
+// like CREDITS_LINKS/continueImg below) — the browser cache keys on the
+// full URL, so a preload of the unversioned path doesn't warm the cache
+// for a later request of the versioned one. Bit the hover-swap images
+// specifically: they have no other DOM reference to load them, so a
+// mismatched preload left them as a genuine cold fetch on first hover.
 const MENU_UI_IMAGES = [
-  'assets/menu-bg.png',
-  'assets/menu-text/title-untorra.png',
-  'assets/menu-text/item-continue-inactive.png',
-  'assets/menu-text/item-continue-active.png',
-  'assets/menu-text/item-newgame.png',
-  'assets/menu-text/item-credits.png',
-  'assets/menu-text/item-physical-ost.png',
-  'assets/menu-text/item-back.png',
-  'assets/menu-text/credits-matthew-swan.png',
-  'assets/menu-text/credits-matthew-swan-hover.png',
-  'assets/menu-text/credits-comma-2026.png',
-  'assets/menu-text/credits-special-thanks-to.png',
-  'assets/menu-text/credits-riley-w.png',
-  'assets/menu-text/credits-riley-w-hover.png',
-  'assets/menu-text/credits-line3.png',
-  'assets/menu-text/credits-line4.png',
+  'assets/menu-bg.png?v=3',
+  'assets/menu-text/title-untorra.png?v=8',
+  'assets/menu-text/item-continue-inactive.png?v=2',
+  'assets/menu-text/item-continue-active.png?v=2',
+  'assets/menu-text/item-newgame.png?v=2',
+  'assets/menu-text/item-credits.png?v=2',
+  'assets/menu-text/item-physical-ost.png?v=1',
+  'assets/menu-text/item-back.png?v=2',
+  'assets/menu-text/credits-matthew-swan.png?v=1',
+  'assets/menu-text/credits-matthew-swan-hover.png?v=1',
+  'assets/menu-text/credits-comma-2026.png?v=1',
+  'assets/menu-text/credits-special-thanks-to.png?v=1',
+  'assets/menu-text/credits-riley-w.png?v=1',
+  'assets/menu-text/credits-riley-w-hover.png?v=1',
+  'assets/menu-text/credits-line3.png?v=1',
+  'assets/menu-text/credits-line4.png?v=1',
   'assets/cursors/front.png',
   'assets/cursors/back.png',
   'assets/cursors/left.png',
@@ -1583,11 +1590,15 @@ const MENU_UI_IMAGES = [
   'assets/cursors/grab.png',
 ];
 function preloadMenuImages() {
+  // Not routed through assetPath() here — that percent-encodes each
+  // '/'-delimited segment, which would mangle a trailing "?v=N" query
+  // into "%3Fv%3DN". None of these filenames contain characters that
+  // actually need encoding, so using the literal path is safe.
   return Promise.all(MENU_UI_IMAGES.map(path => new Promise(resolve => {
     const im = new Image();
     im.onload = resolve;
     im.onerror = resolve;
-    im.src = assetPath(path);
+    im.src = path;
   })));
 }
 
