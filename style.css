@@ -299,12 +299,13 @@ html, body {
 
 /* Multi-line composite (name credit + special-thanks paragraph), baked as
    one image the same low-res pixel-mosaic way as .menu-img but with its own
-   height — the name line renders at a bigger source font-size than the
-   paragraph lines within the same file, so this can't just reuse .menu-img's
-   flat 24px. */
+   height since it's several lines tall — every line uses the exact same
+   font size as the rest of the menu (only bold vs. regular weight tells
+   the name/"Riley W" apart), so this stays proportional to everything
+   else once scaled by the same 24/28 ratio .menu-img uses. */
 .credits-body-img {
   display: block;
-  height: 137px;
+  height: 129px;
   width: auto;
   image-rendering: pixelated;
   image-rendering: -moz-crisp-edges;
