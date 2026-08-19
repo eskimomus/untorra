@@ -352,6 +352,11 @@ html, body {
 }
 .credits-link {
   display: block;
+  /* overrides the screen-wide front.png cursor (see #title-screen,
+     #credits-screen above) — same grab/hand asset already used for
+     interactive collider zones elsewhere, matching CURSOR_CSS.grab in
+     game.js exactly so there's only one "hand" cursor asset in the game. */
+  cursor: url("assets/cursors/grab.png") 11 11, pointer;
 }
 
 .menu-item {
