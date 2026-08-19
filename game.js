@@ -1602,25 +1602,26 @@ function preloadMenuImages() {
   })));
 }
 
-// "loading ." / ".." / "..." cycling every 300ms while preloadMenuImages()
-// is still in flight — the 2nd/3rd frames are warmed separately (not via
-// the big MENU_UI_IMAGES Promise, which is exactly what this is running
-// alongside) so the animation itself never stutters waiting on its own
-// tiny frames.
-const LOADING_FRAMES = [
-  'assets/menu-text/loading-1.png?v=1',
-  'assets/menu-text/loading-2.png?v=1',
-  'assets/menu-text/loading-3.png?v=1',
+// "loading" stays put; only the dots ("." / ".." / "...") cycle every
+// second in their own fixed-width slot (see .loading-dots-slot in
+// style.css) while preloadMenuImages() is still in flight. The other 2 dot
+// frames are warmed separately (not via the big MENU_UI_IMAGES Promise,
+// which is exactly what this is running alongside) so the animation itself
+// never stutters waiting on its own tiny frames.
+const LOADING_DOT_FRAMES = [
+  'assets/menu-text/loading-dots-1.png?v=1',
+  'assets/menu-text/loading-dots-2.png?v=1',
+  'assets/menu-text/loading-dots-3.png?v=1',
 ];
 let loadingFrameIndex = 0;
 let loadingDotTimer = null;
 function startLoadingIndicator() {
-  LOADING_FRAMES.slice(1).forEach(src => { new Image().src = src; });
-  const img = document.getElementById('loading-img');
+  LOADING_DOT_FRAMES.slice(1).forEach(src => { new Image().src = src; });
+  const img = document.getElementById('loading-dots-img');
   loadingDotTimer = setInterval(() => {
-    loadingFrameIndex = (loadingFrameIndex + 1) % LOADING_FRAMES.length;
-    img.src = LOADING_FRAMES[loadingFrameIndex];
-  }, 300);
+    loadingFrameIndex = (loadingFrameIndex + 1) % LOADING_DOT_FRAMES.length;
+    img.src = LOADING_DOT_FRAMES[loadingFrameIndex];
+  }, 1000);
 }
 function stopLoadingIndicator() {
   clearInterval(loadingDotTimer);

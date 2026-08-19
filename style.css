@@ -111,6 +111,18 @@ html, body {
   transition: opacity 300ms ease;
 }
 #loading-indicator.hidden { opacity: 0; pointer-events: none; }
+.loading-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 22px; /* real word-space, same derivation as .credits-line's gap */
+}
+/* Fixed-width slot sized to the widest ("...") dot frame and left-aligned
+   within it, so "loading" itself never shifts as the dot count cycles —
+   only the dots grow into their own reserved space. */
+.loading-dots-slot {
+  display: inline-block;
+  width: 32px;
+}
 
 .hotspot {
   position: absolute;
