@@ -1038,6 +1038,16 @@ let rhythmTimers = [];
 let imgA, imgB, activeImg;
 let hotspotLayer, tabloLayer, colliderLayer, fadeOverlay, sceneWrap, vignetteEl;
 let titleScreen, creditsScreen, newGameBtn, continueBtn, continueImg, creditsBtn, creditsBackBtn, storeBtn;
+
+// Credits-screen links (name credit, "Riley W") swap to a separate
+// pre-rendered hover-color image on mouseenter/mouseleave — same "bake the
+// color into the PNG, swap the whole image" approach as continueImg's
+// active/inactive swap, since image-rendering:pixelated can't survive a
+// live CSS color change.
+const CREDITS_LINKS = [
+  { id: 'credits-img-swan', normal: 'assets/menu-text/credits-matthew-swan.png?v=1', hover: 'assets/menu-text/credits-matthew-swan-hover.png?v=1' },
+  { id: 'credits-img-riley', normal: 'assets/menu-text/credits-riley-w.png?v=1', hover: 'assets/menu-text/credits-riley-w-hover.png?v=1' },
+];
 // true once "new game" has actually been pressed once — gates both the
 // "continue" menu item and whether Esc is allowed to pause into the menu
 // (nothing to pause into before a game exists)
@@ -1558,7 +1568,14 @@ const MENU_UI_IMAGES = [
   'assets/menu-text/item-credits.png',
   'assets/menu-text/item-physical-ost.png',
   'assets/menu-text/item-back.png',
-  'assets/menu-text/credits-body.png',
+  'assets/menu-text/credits-matthew-swan.png',
+  'assets/menu-text/credits-matthew-swan-hover.png',
+  'assets/menu-text/credits-comma-2026.png',
+  'assets/menu-text/credits-special-thanks-to.png',
+  'assets/menu-text/credits-riley-w.png',
+  'assets/menu-text/credits-riley-w-hover.png',
+  'assets/menu-text/credits-line3.png',
+  'assets/menu-text/credits-line4.png',
   'assets/cursors/front.png',
   'assets/cursors/back.png',
   'assets/cursors/left.png',
@@ -1625,6 +1642,12 @@ function init() {
   creditsBtn = document.getElementById('menu-credits');
   creditsBackBtn = document.getElementById('credits-back');
   storeBtn = document.getElementById('menu-store');
+
+  CREDITS_LINKS.forEach(({ id, normal, hover }) => {
+    const img = document.getElementById(id);
+    img.addEventListener('mouseenter', () => { img.src = hover; });
+    img.addEventListener('mouseleave', () => { img.src = normal; });
+  });
 
   newGameBtn.addEventListener('click', () => {
     tryResumeAudio();

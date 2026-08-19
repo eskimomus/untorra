@@ -297,22 +297,33 @@ html, body {
   -webkit-user-select: none;
 }
 
-/* Multi-line composite (name credit + special-thanks paragraph), baked as
-   one image the same low-res pixel-mosaic way as .menu-img but with its own
-   height since it's several lines tall — every line uses the exact same
-   font size as the rest of the menu (only bold vs. regular weight tells
-   the name/"Riley W" apart), so this stays proportional to everything
-   else once scaled by the same 24/28 ratio .menu-img uses. */
-.credits-body-img {
+/* Credits body is now several lines of independent word/phrase images (not
+   one baked composite) so "matthew swan" and "Riley W" can each be a real
+   link with their own hover recolor — every piece is a standard 28px-native
+   label, so they all reuse .menu-img rather than needing a dedicated class.
+   Each line is a flex row so a link word can sit inline next to plain text
+   on the same baseline (both share the same fixed vertical frame from the
+   generator, so top-alignment is enough — no manual baseline math needed). */
+.credits-line {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  /* reproduces a real word-space: within one baked image a space character
+     gets the generator's letter-spacing added on BOTH sides (once after the
+     preceding letter, once after the space itself) plus its own glyph
+     advance — confirmed by measuring the real gap between "new"/"game" in
+     item-newgame.png (26px native) against font metrics, not guessed. */
+  gap: 22px;
+}
+/* "matthew swan, 2026" — the comma hugs the name with no word-space between
+   them, so this line's gap is just the letter-spacing component (no space
+   glyph); the margin below reproduces the blank line before the paragraph. */
+.credits-name-line {
+  gap: 9px;
+  margin-bottom: 32px;
+}
+.credits-link {
   display: block;
-  height: 129px;
-  width: auto;
-  image-rendering: pixelated;
-  image-rendering: -moz-crisp-edges;
-  image-rendering: crisp-edges;
-  -webkit-user-drag: none;
-  user-select: none;
-  -webkit-user-select: none;
 }
 
 .menu-item {
