@@ -1556,7 +1556,7 @@ const MENU_UI_IMAGES = [
   'assets/menu-text/item-continue-active.png',
   'assets/menu-text/item-newgame.png',
   'assets/menu-text/item-credits.png',
-  'assets/menu-text/item-store.png',
+  'assets/menu-text/item-physical-ost.png',
   'assets/menu-text/item-back.png',
   'assets/menu-text/credits-body.png',
   'assets/cursors/front.png',
