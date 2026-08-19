@@ -363,8 +363,11 @@ html, body {
   /* explicit on every .menu-item, active or not (e.g. "continue" before a
      game has started) — <button> has its own UA-stylesheet cursor default
      that wins over simple inheritance from the parent, so relying on
-     inheriting the screen's front cursor doesn't actually work here */
-  cursor: url("assets/cursors/front.png") 11 0, pointer;
+     inheriting the screen's front cursor doesn't actually work here.
+     Uses the grab/hand cursor (same asset as .credits-link) rather than
+     the screen-wide front.png, since these are clickable UI controls, not
+     in-scene navigation. */
+  cursor: url("assets/cursors/grab.png") 11 11, pointer;
   background: none;
   border: none;
   padding: 0;
