@@ -96,6 +96,22 @@ html, body {
 }
 #fade-overlay.show { opacity: 1; }
 
+/* Shown on the plain black background while preloadMenuImages() is still
+   fetching the title screen's own assets (#title-screen itself stays at
+   opacity:0 until then, see .assets-ready below) — hidden the moment the
+   menu is ready to fade in, via the same opacity/pointer-events pattern
+   used everywhere else in this file for a "not ready yet" state. */
+#loading-indicator {
+  position: absolute;
+  inset: 0;
+  z-index: 160;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 300ms ease;
+}
+#loading-indicator.hidden { opacity: 0; pointer-events: none; }
+
 .hotspot {
   position: absolute;
   z-index: 10;
