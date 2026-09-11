@@ -164,15 +164,67 @@ function smoothLoopEdges(buffer, fadeSamples) {
   }
 }
 
+// Shared progress counter behind the "loading NN%" indicator — every
+// individual asset load anywhere (ambient/music tracks, render images,
+// collider maps, one-shot SFX, menu chrome) registers itself here via
+// preloadTrack() before any of them can possibly resolve (everything that
+// calls this is invoked synchronously back-to-back from init(), so the
+// total is fully accumulated before the first item finishes). A tracked
+// promise always settles (success or failure both count as "done") so one
+// broken asset can't leave the percentage stuck short of 100.
+let preloadTotal = 0;
+let preloadDone = 0;
+function preloadTrack(promise) {
+  preloadTotal++;
+  return promise.then(onPreloadItemDone, onPreloadItemDone);
+}
+function onPreloadItemDone() {
+  preloadDone++;
+  renderLoadingPercent();
+}
+const DIGIT_IMAGES = {
+  '0': 'assets/menu-text/digit-0.png?v=1',
+  '1': 'assets/menu-text/digit-1.png?v=1',
+  '2': 'assets/menu-text/digit-2.png?v=1',
+  '3': 'assets/menu-text/digit-3.png?v=1',
+  '4': 'assets/menu-text/digit-4.png?v=1',
+  '5': 'assets/menu-text/digit-5.png?v=1',
+  '6': 'assets/menu-text/digit-6.png?v=1',
+  '7': 'assets/menu-text/digit-7.png?v=1',
+  '8': 'assets/menu-text/digit-8.png?v=1',
+  '9': 'assets/menu-text/digit-9.png?v=1',
+  '%': 'assets/menu-text/digit-percent.png?v=1',
+};
+// Composes "NN%" from individual pre-baked digit sprites (same pixel-mosaic
+// pipeline as every other menu label) into #loading-percent-slot — there's
+// no live web font in this project to just set textContent with, see the
+// "Real main menu built" convention every other UI string already follows.
+function renderLoadingPercent() {
+  const pct = preloadTotal > 0 ? Math.floor((preloadDone / preloadTotal) * 100) : 100;
+  const slot = document.getElementById('loading-percent-slot');
+  if (!slot) return;
+  slot.innerHTML = '';
+  (String(pct) + '%').split('').forEach(ch => {
+    const img = document.createElement('img');
+    img.className = 'menu-img';
+    img.src = DIGIT_IMAGES[ch];
+    slot.appendChild(img);
+  });
+}
+function stopLoadingIndicator() {
+  document.getElementById('loading-indicator').classList.add('hidden');
+}
+
 function initAmbientTracks() {
   audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const promises = [];
   for (const key in AMBIENT_FILES) {
     const gainNode = audioCtx.createGain();
     gainNode.gain.value = 0;
     gainNode.connect(audioCtx.destination);
     const t = { gainNode, source: null };
     ambientTracks[key] = t;
-    fetch(sound(AMBIENT_FILES[key]))
+    const p = fetch(sound(AMBIENT_FILES[key]))
       .then(r => r.arrayBuffer())
       .then(buf => audioCtx.decodeAudioData(buf))
       .then(audioBuffer => {
@@ -185,7 +237,9 @@ function initAmbientTracks() {
         t.source = src;
       })
       .catch(err => console.warn('ambient track failed to load:', key, err));
+    promises.push(preloadTrack(p));
   }
+  return Promise.all(promises);
 }
 
 // Ramps one ambient track's gain to `target` (0..1) over `fadeMs` using the
@@ -219,13 +273,14 @@ function updateAmbience(nodeId) {
 const musicTracks = {};
 
 function initMusicTracks() {
+  const promises = [];
   for (const key in MUSIC_FILES) {
     const gainNode = audioCtx.createGain();
     gainNode.gain.value = 0;
     gainNode.connect(audioCtx.destination);
     const t = { gainNode, source: null };
     musicTracks[key] = t;
-    fetch(musicSound(MUSIC_FILES[key]))
+    const p = fetch(musicSound(MUSIC_FILES[key]))
       .then(r => r.arrayBuffer())
       .then(buf => audioCtx.decodeAudioData(buf))
       .then(audioBuffer => {
@@ -237,7 +292,9 @@ function initMusicTracks() {
         t.source = src;
       })
       .catch(err => console.warn('music track failed to load:', key, err));
+    promises.push(preloadTrack(p));
   }
+  return Promise.all(promises);
 }
 
 // Same gain-ramp mechanism as setAmbient, but fade-in/out durations differ
@@ -504,8 +561,8 @@ function colliderKeyFor(id) {
 
 const colliderImageCache = {}; // map path -> ImageData | 'loading'
 
-function ensureColliderLoaded(path) {
-  if (colliderImageCache[path]) return;
+function ensureColliderLoaded(path, onDone) {
+  if (colliderImageCache[path]) { if (onDone) onDone(); return; }
   colliderImageCache[path] = 'loading';
   const im = new Image();
   im.onload = () => {
@@ -515,7 +572,9 @@ function ensureColliderLoaded(path) {
     const ctx = canvas.getContext('2d');
     ctx.drawImage(im, 0, 0);
     colliderImageCache[path] = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    if (onDone) onDone();
   };
+  im.onerror = () => { if (onDone) onDone(); };
   im.src = path;
 }
 
@@ -1542,14 +1601,29 @@ function preloadAllAssets() {
   state.leverOpen = savedLever;
   state.circuitGreen = savedGreen;
 
+  const colliderPaths = new Set();
   for (const key in COLLIDER_DATA) {
     const cfg = COLLIDER_DATA[key];
-    ensureColliderLoaded(cfg.map);
+    colliderPaths.add(cfg.map);
     cfg.actions.forEach(a => { if (a && a.sound) soundFiles.add(a.sound); });
   }
 
-  imageUrls.forEach(url => { new Image().src = url; });
-  soundFiles.forEach(file => { fetch(sound(file)).catch(() => {}); });
+  const promises = [];
+  imageUrls.forEach(url => {
+    promises.push(preloadTrack(new Promise(res => {
+      const im = new Image();
+      im.onload = res;
+      im.onerror = res;
+      im.src = url;
+    })));
+  });
+  colliderPaths.forEach(path => {
+    promises.push(preloadTrack(new Promise(res => ensureColliderLoaded(path, res))));
+  });
+  soundFiles.forEach(file => {
+    promises.push(preloadTrack(fetch(sound(file)).catch(() => {})));
+  });
+  return Promise.all(promises);
 }
 
 // Menu chrome (background, logo, button labels, cursors) is small but each
@@ -1594,38 +1668,12 @@ function preloadMenuImages() {
   // '/'-delimited segment, which would mangle a trailing "?v=N" query
   // into "%3Fv%3DN". None of these filenames contain characters that
   // actually need encoding, so using the literal path is safe.
-  return Promise.all(MENU_UI_IMAGES.map(path => new Promise(resolve => {
+  return Promise.all(MENU_UI_IMAGES.map(path => preloadTrack(new Promise(resolve => {
     const im = new Image();
     im.onload = resolve;
     im.onerror = resolve;
     im.src = path;
-  })));
-}
-
-// "loading" stays put; only the dots ("." / ".." / "...") cycle every
-// second in their own fixed-width slot (see .loading-dots-slot in
-// style.css) while preloadMenuImages() is still in flight. The other 2 dot
-// frames are warmed separately (not via the big MENU_UI_IMAGES Promise,
-// which is exactly what this is running alongside) so the animation itself
-// never stutters waiting on its own tiny frames.
-const LOADING_DOT_FRAMES = [
-  'assets/menu-text/loading-dots-1.png?v=1',
-  'assets/menu-text/loading-dots-2.png?v=1',
-  'assets/menu-text/loading-dots-3.png?v=1',
-];
-let loadingFrameIndex = 0;
-let loadingDotTimer = null;
-function startLoadingIndicator() {
-  LOADING_DOT_FRAMES.slice(1).forEach(src => { new Image().src = src; });
-  const img = document.getElementById('loading-dots-img');
-  loadingDotTimer = setInterval(() => {
-    loadingFrameIndex = (loadingFrameIndex + 1) % LOADING_DOT_FRAMES.length;
-    img.src = LOADING_DOT_FRAMES[loadingFrameIndex];
-  }, 1000);
-}
-function stopLoadingIndicator() {
-  clearInterval(loadingDotTimer);
-  document.getElementById('loading-indicator').classList.add('hidden');
+  }))));
 }
 
 const ENDING_DARK_MS = 2000;
@@ -1639,9 +1687,14 @@ function openEndingMenu() {
 }
 
 function init() {
-  initAmbientTracks();
-  initMusicTracks();
-  preloadAllAssets();
+  // Not registered with preloadTrack() — these ARE the glyphs the percent
+  // readout itself is drawn with, so warming them can't be gated on the
+  // percent they'd be reporting on.
+  Object.values(DIGIT_IMAGES).forEach(src => { new Image().src = src; });
+
+  const ambientReady = initAmbientTracks();
+  const musicReady = initMusicTracks();
+  const allAssetsReady = preloadAllAssets();
 
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') tryResumeAudio();
@@ -1671,8 +1724,12 @@ function init() {
   });
 
   titleScreen = document.getElementById('title-screen');
-  startLoadingIndicator();
-  preloadMenuImages().then(() => {
+  const menuReady = preloadMenuImages();
+  // preloadTotal is now fully accumulated (every preload* call above ran
+  // synchronously) — safe to draw the starting "0%" (or wherever a couple
+  // of instant cache hits already put it) before anything else resolves.
+  renderLoadingPercent();
+  Promise.all([ambientReady, musicReady, allAssetsReady, menuReady]).then(() => {
     stopLoadingIndicator();
     titleScreen.classList.add('assets-ready');
   });
@@ -1732,9 +1789,10 @@ function init() {
     titleScreen.classList.remove('hidden');
   });
 
-  // TODO: no physical-OST store URL yet — wire this once there's a real one
-  // (e.g. storeBtn.addEventListener('click', () => window.open(URL, '_blank')))
-  storeBtn.addEventListener('click', () => {});
+  const PHYSICAL_OST_URL = 'https://empyrean-records.myshopify.com/products/emp08-matt-swan-untorra?variant=58441317876056&fbclid=PAVERFWAUP-01wZG9mAmZkaWQWUOJ1nD-ZMF8bUdVJL1m4505smNTyAGV4dG4DYWVtAjEwAHNydGMGYXBwX2lkDzEyNDAyNDU3NDI4NzQxNAABp5m0VqzVoXrEwh6ff7j49Ht8EsjI4x8pQBNlyHNNkAdX3AuaTs4gkC5QjZdr_aem_-3HFpAclP3xkbL9aanGAGw';
+  storeBtn.addEventListener('click', () => {
+    window.open(PHYSICAL_OST_URL, '_blank', 'noopener,noreferrer');
+  });
 
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape' || !gameStarted) return;

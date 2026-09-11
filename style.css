@@ -116,12 +116,15 @@ html, body {
   align-items: flex-start;
   gap: 22px; /* real word-space, same derivation as .credits-line's gap */
 }
-/* Fixed-width slot sized to the widest ("...") dot frame and left-aligned
-   within it, so "loading" itself never shifts as the dot count cycles —
-   only the dots grow into their own reserved space. */
-.loading-dots-slot {
-  display: inline-block;
-  width: 32px;
+/* Fixed-width slot sized to the widest possible reading ("100%") and
+   left-aligned within it, so "loading" never shifts as the digit count
+   changes (1 digit at 0-9%, 2 at 10-99%, 3 at 100%) — same fixed-slot
+   trick used for the old dot-cycle animation this replaced. */
+.loading-percent-slot {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px; /* digit-to-digit spacing, no space glyph between them */
+  width: 62px;
 }
 
 .hotspot {
