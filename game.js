@@ -22,10 +22,35 @@ const ONESHOT_VOL = Math.pow(10, -10 / 20);
 // note" files) are +10dB on top of that — net back to unity gain, same
 // "exempt this one from the general one-shot attenuation" shape as finalNoise.
 const NOTE_BOOST = Math.pow(10, 10 / 20);
+// One-shots play through the shared AudioContext off a pre-decoded buffer
+// (filled by preloadAllAssets), not a fresh `new Audio()` per call. The old
+// element-per-play approach had two real problems: every play paid a
+// fetch/decode cost before any sound came out (the preloader's plain
+// fetch() didn't help — media elements issue their own range requests and
+// don't reliably reuse that cache entry), and each element was subject to
+// autoplay policy on its own, so Safari silently rejected every SFX fired
+// from a setTimeout chain (rhythm notes, tablo playback) rather than a
+// click. A decoded buffer starts sample-immediately and rides the one
+// context unlock. Falls back to the old path only while a buffer is still
+// decoding, so early clicks aren't silent.
+const sfxBuffers = {};
 function playOneShot(file, vol) {
-  const audio = new Audio(sound(file));
   const boost = /^note [1-4]\.ogg$/.test(file) ? NOTE_BOOST : 1;
-  audio.volume = (vol ?? 1) * ONESHOT_VOL * boost;
+  const volume = (vol ?? 1) * ONESHOT_VOL * boost;
+  const buffer = sfxBuffers[file];
+  if (audioCtx && buffer) {
+    tryResumeAudio();
+    const src = audioCtx.createBufferSource();
+    src.buffer = buffer;
+    const gainNode = audioCtx.createGain();
+    gainNode.gain.value = volume;
+    src.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+    src.start(0);
+    return src;
+  }
+  const audio = new Audio(sound(file));
+  audio.volume = volume;
   audio.play().catch(() => {});
   return audio;
 }
@@ -178,9 +203,33 @@ function preloadTrack(promise) {
   preloadTotal++;
   return promise.then(onPreloadItemDone, onPreloadItemDone);
 }
+function preloadRegister(count) {
+  preloadTotal += count;
+}
 function onPreloadItemDone() {
   preloadDone++;
   renderLoadingPercent();
+}
+
+// Runs task factories at a bounded concurrency rather than firing every
+// request at once. The old all-at-once burst is what made audio loading
+// unreliable — multi-megabyte .ogg files competing with ~150 image
+// requests would intermittently fail or get aborted, and back then a
+// failed track had no retry and no restart path. Audio deliberately isn't
+// routed through this pool: it starts immediately and un-throttled from
+// init(), so it wins the bandwidth it needs before the bulk begins.
+function runPooled(taskFactories, limit) {
+  let next = 0;
+  const runner = () => {
+    if (next >= taskFactories.length) return Promise.resolve();
+    const task = taskFactories[next++];
+    return task().catch(() => {}).then(() => {
+      onPreloadItemDone();
+      return runner();
+    });
+  };
+  const workers = Math.max(1, Math.min(limit, taskFactories.length));
+  return Promise.all(Array.from({ length: workers }, runner));
 }
 const DIGIT_IMAGES = {
   '0': 'assets/menu-text/digit-0.png?v=1',
@@ -215,6 +264,46 @@ function stopLoadingIndicator() {
   document.getElementById('loading-indicator').classList.add('hidden');
 }
 
+// Fetch + decode with retries. A transient failure here used to be fatal
+// for that track for the whole session: the .catch just warned, t.source
+// stayed null, and nothing anywhere retried or restarted it. With ~200
+// requests previously going out at once, the big .ogg files were exactly
+// the ones that lost that race — which is what made ambience and music
+// seem to load only every other time.
+function fetchDecodeAudio(url, attempts = 3) {
+  return fetch(url)
+    .then(r => {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.arrayBuffer();
+    })
+    .then(buf => audioCtx.decodeAudioData(buf))
+    .catch(err => {
+      if (attempts <= 1) throw err;
+      return new Promise(res => setTimeout(res, 400))
+        .then(() => fetchDecodeAudio(url, attempts - 1));
+    });
+}
+
+// Starting a source is kept separate from decoding so a track can be
+// restarted later — iOS drops the context (and every live node with it) on
+// an interruption, and a source that ended or never started would
+// otherwise stay silent for good, since these are started exactly once.
+function startTrackSource(t) {
+  if (!t.buffer || t.source) return;
+  const src = audioCtx.createBufferSource();
+  src.buffer = t.buffer;
+  src.loop = true;
+  src.connect(t.gainNode);
+  src.onended = () => { if (t.source === src) t.source = null; };
+  src.start(0);
+  t.source = src;
+}
+
+function ensureTrackSources() {
+  for (const key in ambientTracks) startTrackSource(ambientTracks[key]);
+  for (const key in musicTracks) startTrackSource(musicTracks[key]);
+}
+
 function initAmbientTracks() {
   audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   const promises = [];
@@ -222,19 +311,13 @@ function initAmbientTracks() {
     const gainNode = audioCtx.createGain();
     gainNode.gain.value = 0;
     gainNode.connect(audioCtx.destination);
-    const t = { gainNode, source: null };
+    const t = { gainNode, source: null, buffer: null };
     ambientTracks[key] = t;
-    const p = fetch(sound(AMBIENT_FILES[key]))
-      .then(r => r.arrayBuffer())
-      .then(buf => audioCtx.decodeAudioData(buf))
+    const p = fetchDecodeAudio(sound(AMBIENT_FILES[key]))
       .then(audioBuffer => {
         smoothLoopEdges(audioBuffer, Math.round(audioCtx.sampleRate * 0.015));
-        const src = audioCtx.createBufferSource();
-        src.buffer = audioBuffer;
-        src.loop = true;
-        src.connect(gainNode);
-        src.start(0);
-        t.source = src;
+        t.buffer = audioBuffer;
+        startTrackSource(t);
       })
       .catch(err => console.warn('ambient track failed to load:', key, err));
     promises.push(preloadTrack(p));
@@ -278,18 +361,12 @@ function initMusicTracks() {
     const gainNode = audioCtx.createGain();
     gainNode.gain.value = 0;
     gainNode.connect(audioCtx.destination);
-    const t = { gainNode, source: null };
+    const t = { gainNode, source: null, buffer: null };
     musicTracks[key] = t;
-    const p = fetch(musicSound(MUSIC_FILES[key]))
-      .then(r => r.arrayBuffer())
-      .then(buf => audioCtx.decodeAudioData(buf))
+    const p = fetchDecodeAudio(musicSound(MUSIC_FILES[key]))
       .then(audioBuffer => {
-        const src = audioCtx.createBufferSource();
-        src.buffer = audioBuffer;
-        src.loop = true;
-        src.connect(gainNode);
-        src.start(0);
-        t.source = src;
+        t.buffer = audioBuffer;
+        startTrackSource(t);
       })
       .catch(err => console.warn('music track failed to load:', key, err));
     promises.push(preloadTrack(p));
@@ -574,7 +651,15 @@ function ensureColliderLoaded(path, onDone) {
     colliderImageCache[path] = ctx.getImageData(0, 0, canvas.width, canvas.height);
     if (onDone) onDone();
   };
-  im.onerror = () => { if (onDone) onDone(); };
+  im.onerror = () => {
+    // Clear the 'loading' latch instead of leaving it set. A collider whose
+    // PNG failed once used to stay "loading" forever, and since
+    // resolveColliderAction() bails on that state, every click on that
+    // screen silently did nothing for the rest of the session — one dropped
+    // request was enough to permanently break a location.
+    delete colliderImageCache[path];
+    if (onDone) onDone();
+  };
   im.src = path;
 }
 
@@ -586,7 +671,12 @@ function resolveColliderAction(clientX, clientY) {
   const cfg = COLLIDER_DATA[key];
   if (!cfg) return null;
   const data = colliderImageCache[cfg.map];
-  if (!data || data === 'loading') return null;
+  if (!data || data === 'loading') {
+    // Kick off (or retry) the load so a screen that lost its map can heal on
+    // a later click rather than staying dead. No-op if already in flight.
+    ensureColliderLoaded(cfg.map);
+    return null;
+  }
 
   const rect = sceneWrap.getBoundingClientRect();
   const scale = Math.max(rect.width / SRC_W, rect.height / SRC_H);
@@ -603,6 +693,7 @@ function resolveColliderAction(clientX, clientY) {
 }
 
 function handleColliderClick(clientX, clientY) {
+  if (autoAdvancing) return;
   const action = resolveColliderAction(clientX, clientY);
   if (!action) return;
 
@@ -1145,15 +1236,26 @@ function stopRhythm() {
 }
 
 let autoAdvanceTimers = [];
+// True only while a scripted hold/fade/jump is mid-flight. #fade-overlay is
+// pointer-events:none, so without this a click during the 2s hold or the
+// fade-to-black still reached the collider layer underneath, and whatever
+// it hit called render() -> stopAutoAdvance(), which clears the *pending
+// jump timer*. The screen had already faded to black, so the fade played
+// and then came back to the same place — the jump it was fading for had
+// just been cancelled. Self-clearing: render() always calls
+// stopAutoAdvance() first, so this can't latch on.
+let autoAdvancing = false;
 function stopAutoAdvance() {
   autoAdvanceTimers.forEach(clearTimeout);
   autoAdvanceTimers = [];
+  autoAdvancing = false;
   fadeOverlay.classList.remove('show');
 }
 
 // Holds the current frame, fades to black, jumps to `to`, then fades back in.
 // Cancelled by stopAutoAdvance() if the player navigates away mid-hold.
 function startAutoAdvance({ holdMs, fadeMs, to, sound: soundFile }) {
+  autoAdvancing = true;
   if (soundFile) playOneShot(soundFile);
   autoAdvanceTimers.push(setTimeout(() => {
     fadeOverlay.style.transitionDuration = fadeMs + 'ms';
@@ -1211,13 +1313,28 @@ function render() {
   updateMusic(state.current);
   vignetteEl.style.display = node.noVignette ? 'none' : '';
 
+  // The crossfade swap has to survive two cases where `load` never fires:
+  // (1) nextImg already holds this exact URL — assigning the same src is a
+  // no-op, so no event — which happens constantly, since nextImg is the
+  // previously-shown image and this game is full of A->B->A moves (every
+  // "back", every corridor turn-around); (2) the image is already decoded
+  // in memory (true for basically everything now that preloadAllAssets()
+  // warms every render up front), so it can complete before the handler
+  // would ever run. Either one used to leave activeImg pointing at the old
+  // element: state advanced, the screen kept showing the previous scene —
+  // which reads as "the click did nothing".
   const nextImg = activeImg === imgA ? imgB : imgA;
-  nextImg.src = resolve(node.image);
-  nextImg.onload = () => {
+  let swapped = false;
+  const swapToNext = () => {
+    if (swapped) return;
+    swapped = true;
     imgA.classList.toggle('active', nextImg === imgA);
     imgB.classList.toggle('active', nextImg === imgB);
     activeImg = nextImg;
   };
+  nextImg.onload = swapToNext;
+  nextImg.src = resolve(node.image);
+  if (nextImg.complete && nextImg.naturalWidth > 0) swapToNext();
 
   const colliderCfg = COLLIDER_DATA[colliderKeyFor(state.current)];
   if (colliderCfg) ensureColliderLoaded(colliderCfg.map);
@@ -1561,7 +1678,11 @@ function playEndingFromStart() {
 // through separate <audio> elements outside this context entirely. Calling
 // this from every later gesture and on tab-foreground fixes that.
 function tryResumeAudio() {
-  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+  if (!audioCtx) return;
+  if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+  // Resuming isn't enough on its own — anything the interruption killed has
+  // to be given a fresh source, or the context runs again in silence.
+  ensureTrackSources();
 }
 
 // One-shot SFX filenames that aren't reachable by walking node/collider data
@@ -1608,22 +1729,27 @@ function preloadAllAssets() {
     cfg.actions.forEach(a => { if (a && a.sound) soundFiles.add(a.sound); });
   }
 
-  const promises = [];
+  const tasks = [];
+  // SFX first: these decode into sfxBuffers, which is what makes a click
+  // play instantly instead of paying a fetch+decode at press time.
+  soundFiles.forEach(file => {
+    tasks.push(() => fetchDecodeAudio(sound(file), 2)
+      .then(buffer => { sfxBuffers[file] = buffer; })
+      .catch(err => console.warn('sfx failed to load:', file, err)));
+  });
+  colliderPaths.forEach(path => {
+    tasks.push(() => new Promise(res => ensureColliderLoaded(path, res)));
+  });
   imageUrls.forEach(url => {
-    promises.push(preloadTrack(new Promise(res => {
+    tasks.push(() => new Promise(res => {
       const im = new Image();
       im.onload = res;
       im.onerror = res;
       im.src = url;
-    })));
+    }));
   });
-  colliderPaths.forEach(path => {
-    promises.push(preloadTrack(new Promise(res => ensureColliderLoaded(path, res))));
-  });
-  soundFiles.forEach(file => {
-    promises.push(preloadTrack(fetch(sound(file)).catch(() => {})));
-  });
-  return Promise.all(promises);
+  preloadRegister(tasks.length);
+  return runPooled(tasks, 8);
 }
 
 // Menu chrome (background, logo, button labels, cursors) is small but each
