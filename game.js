@@ -913,7 +913,8 @@ function updateColliderCursor(clientX, clientY) {
   // Empty pixels use the arrow, with its tip at the pointer position.
   // Painted regions retain their action cursor.
   const cursor = action ? (action.cursor || 'front') : 'passive';
-  colliderLayer.style.cursor = CURSOR_CSS[cursor] || CURSOR_CSS.front;
+  const cursorStyle = CURSOR_CSS[cursor] || CURSOR_CSS.front;
+  if (colliderLayer.style.cursor !== cursorStyle) colliderLayer.style.cursor = cursorStyle;
 }
 
 function mkFinal(n) {
@@ -2096,6 +2097,7 @@ function presentMinimapRaster(source, target, width, height) {
   const out = target.getContext('2d', { alpha: false });
   out.imageSmoothingEnabled = false;
   if (!minimapDither) {
+    if (target.dataset.palette) delete target.dataset.palette;
     out.clearRect(0, 0, w, h);
     out.drawImage(source, 0, 0, w, h);
     loadMinimapDither();
@@ -2126,6 +2128,7 @@ function presentMinimapRaster(source, target, width, height) {
     }
   }
   out.putImageData(minimapDitherFrame, 0, 0);
+  if (target.dataset.palette !== 'mac') target.dataset.palette = 'mac';
 }
 
 function paintMinimapRaster() {

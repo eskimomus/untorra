@@ -65,8 +65,9 @@
   };
   let enabled = true, mix = 0.32, noise = 0.38, crt = 0.1, bloom = 0.75;
   let stage, filter, mixNode, controls, enabledInput;
-  let bloomMixNode, bloomBlurNode;
+  let bloomHighlightsNode, bloomBlurNode;
   let scanlineLayer, noiseLayer, noiseTexture, pipelineKey = '';
+  let indexedMapVisible = false;
   let toast, toastTimer, currentScreen = null, vignettes = {};
   const percent = value => Math.max(0, Math.min(100, Math.round(Number(value))));
 
@@ -76,7 +77,7 @@
     const values = Array.from({ length: 256 }, (_, value) => {
       let level = 0;
       while (level + 1 < count && value >= Math.floor((level + 1) * 255 / count)) level++;
-      return Math.min(1, (Math.round(level * 255 / (count - 1)) + 0.5) / 255);
+      return level === 0 ? 0 : Math.min(1, (Math.round(level * 255 / (count - 1)) + 0.5) / 255);
     }).join(' ');
     const rgb = ['R', 'G', 'B'].map(c => linear
       ? `<feFunc${c} type="linear" slope="${(count - 1) / count}"/>`
@@ -84,29 +85,24 @@
     return `<feComponentTransfer in="${input}" result="${result}">${rgb}</feComponentTransfer>`;
   }
   function quantize(count) {
-    return componentTransfer('scene', `scaled${count}`, count, true) +
+    return componentTransfer('SourceGraphic', `scaled${count}`, count, true) +
       `<feComposite in="scaled${count}" in2="pattern" operator="arithmetic" k2="1" k3="${15 / (16 * count)}" result="noisy${count}"/>` +
       componentTransfer(`noisy${count}`, `quant${count}`, count, false);
-  }
-  function mask(name, row, input = 'scene') {
-    return `<feColorMatrix in="${input}" type="matrix" values="0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  ${row.join(' ')}" result="${name}Raw"/>` +
-      `<feComponentTransfer in="${name}Raw" result="${name}"><feFuncA type="discrete" tableValues="0 1"/></feComponentTransfer>`;
   }
   function axis() {
     const lowOffset = 0.5 + 128 * 17 / 255;
     const channels = '<feFuncR type="discrete" tableValues="0 1"/><feFuncG type="discrete" tableValues="0 1"/><feFuncB type="discrete" tableValues="0 1"/>';
-    return '<feColorMatrix in="scene" values="128 -128 -128 0 .5  -128 128 -128 0 .5  -128 -128 128 0 .5  0 0 0 1 0" result="dominantRaw"/>' +
+    return '<feColorMatrix in="SourceGraphic" values="128 -128 -128 0 .5  -128 128 -128 0 .5  -128 -128 128 0 .5  0 0 0 1 0" result="dominantRaw"/>' +
       `<feComponentTransfer in="dominantRaw" result="dominant">${channels}</feComponentTransfer>` +
-      `<feColorMatrix in="scene" values="0 -128 -128 0 ${lowOffset}  -128 0 -128 0 ${lowOffset}  -128 -128 0 0 ${lowOffset}  0 0 0 1 0" result="lowRaw"/>` +
+      `<feColorMatrix in="SourceGraphic" values="0 -128 -128 0 ${lowOffset}  -128 0 -128 0 ${lowOffset}  -128 -128 0 0 ${lowOffset}  0 0 0 1 0" result="lowRaw"/>` +
       `<feComponentTransfer in="lowRaw" result="low">${channels}</feComponentTransfer>` +
       '<feComposite in="dominant" in2="low" operator="arithmetic" k1="1" result="axisMasks"/>' +
       '<feColorMatrix in="axisMasks" values="1 -1 -1 0 0  0 1 -1 0 0  0 0 1 0 0  1 1 1 0 0" result="axisPriority"/>' +
       '<feComposite in="quant16" in2="axisPriority" operator="arithmetic" k1="1" result="axes"/>';
   }
   function gray() {
-    return '<feColorMatrix in="scene" values="0 1 0 0 0  0 0 1 0 0  1 0 0 0 0  0 0 0 1 0" result="rotatedChannels"/>' +
-      '<feBlend in="scene" in2="rotatedChannels" mode="difference" result="channelDifferences"/>' +
-      mask('grayMask', [-128,-128,-128,0,0.5], 'channelDifferences') +
+    return '<feColorMatrix in="SourceGraphic" values="1 -1 0 0 0  0 1 -1 0 0  -1 0 1 0 0  0 0 0 1 0" result="channelDifferences"/>' +
+      '<feColorMatrix in="channelDifferences" values="0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  -255 -255 -255 0 1" result="grayMask"/>' +
       '<feComposite in="quant16" in2="grayMask" operator="in" result="gray"/>';
   }
   function vignetteValue() {
@@ -181,36 +177,33 @@
     noiseTexture.style.animationPlayState = active ? 'running' : 'paused';
   }
   function updateFilter() {
-    const nextKey = `${mix > 0}:${bloom > 0}`;
+    const ditherActive = mix > 0 && !indexedMapVisible;
+    const nextKey = `${ditherActive}:${bloom > 0}`;
     if (pipelineKey !== nextKey) {
       pipelineKey = nextKey;
-      let processed = 'scene';
-      let primitives = '<feFlood flood-color="#000" result="black"/>' +
-        '<feComposite in="SourceGraphic" in2="black" operator="over" result="scene"/>';
-      if (mix > 0) {
+      let processed = 'SourceGraphic';
+      let primitives = '';
+      if (ditherActive) {
         primitives += `<feImage href="${NOISE}" x="0" y="0" width="4" height="4" preserveAspectRatio="none" image-rendering="pixelated" result="patternCell"/>` +
           '<feTile in="patternCell" result="pattern"/>' + quantize(6) + quantize(16) + axis() + gray() +
-          mask('blackMask', [-256,-256,-256,0,0.5]) +
-          '<feComposite in="black" in2="blackMask" operator="in" result="exactBlack"/>' +
-          '<feMerge result="dithered"><feMergeNode in="quant6"/><feMergeNode in="axes"/><feMergeNode in="gray"/><feMergeNode in="exactBlack"/></feMerge>' +
-          '<feComposite id="game-dither-mix" in="dithered" in2="scene" operator="arithmetic" k2="1" k3="0" result="mixed"/>';
+          '<feMerge result="dithered"><feMergeNode in="quant6"/><feMergeNode in="axes"/><feMergeNode in="gray"/></feMerge>' +
+          '<feComposite id="game-dither-mix" in="dithered" in2="SourceGraphic" operator="arithmetic" k2="1" k3="0" result="mixed"/>';
         processed = 'mixed';
       }
       if (bloom > 0) {
-        primitives += `<feColorMatrix in="${processed}" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0.8504 2.8608 0.2888 0 -1.8" result="bloomHighlights"/>` +
+        primitives += `<feColorMatrix id="game-screen-bloom-highlights" in="${processed}" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0.8504 2.8608 0.2888 0 -1.8" result="bloomHighlights"/>` +
           '<feGaussianBlur id="game-screen-bloom-blur" in="bloomHighlights" stdDeviation="2.2" result="bloomGlow"/>' +
-          `<feBlend in="bloomGlow" in2="${processed}" mode="screen" result="withBloom"/>` +
-          `<feComposite id="game-screen-bloom-mix" in="withBloom" in2="${processed}" operator="arithmetic" k2="0" k3="1"/>`;
+          `<feBlend in="bloomGlow" in2="${processed}" mode="screen"/>`;
       }
       filter.innerHTML = primitives;
       mixNode = filter.querySelector('#game-dither-mix');
-      bloomMixNode = filter.querySelector('#game-screen-bloom-mix');
+      bloomHighlightsNode = filter.querySelector('#game-screen-bloom-highlights');
       bloomBlurNode = filter.querySelector('#game-screen-bloom-blur');
     }
     if (mixNode) { mixNode.setAttribute('k2', String(mix)); mixNode.setAttribute('k3', String(1 - mix)); }
-    if (bloomMixNode) { bloomMixNode.setAttribute('k2', String(bloom)); bloomMixNode.setAttribute('k3', String(1 - bloom)); }
+    if (bloomHighlightsNode) bloomHighlightsNode.setAttribute('values', `${bloom} 0 0 0 0  0 ${bloom} 0 0 0  0 0 ${bloom} 0 0  0.8504 2.8608 0.2888 0 -1.8`);
     if (bloomBlurNode) bloomBlurNode.setAttribute('stdDeviation', String(2.2 * stage.clientWidth / 640));
-    stage.classList.toggle('game-dither-enabled', enabled && (mix > 0 || bloom > 0));
+    stage.classList.toggle('game-dither-enabled', enabled && (ditherActive || bloom > 0));
   }
   function setEnabled(next, announce = false) {
     enabled = !!next;
@@ -312,6 +305,23 @@
     };
     resize(); new ResizeObserver(resize).observe(stage);
     document.addEventListener('visibilitychange', syncNoise);
+    const map = document.getElementById('minimap');
+    const raster = document.getElementById('minimap-raster');
+    if (map && raster) {
+      const syncMapFilter = () => {
+        const indexed = !map.classList.contains('hidden') && raster.dataset.palette === 'mac' && Number(getComputedStyle(map).opacity) === 1;
+        if (indexedMapVisible === indexed) return;
+        indexedMapVisible = indexed;
+        updateFilter();
+      };
+      const observer = new MutationObserver(syncMapFilter);
+      observer.observe(map, { attributes: true, attributeFilter: ['class'] });
+      observer.observe(raster, { attributes: true, attributeFilter: ['data-palette'] });
+      map.addEventListener('transitionend', event => {
+        if (event.target === map && event.propertyName === 'opacity') syncMapFilter();
+      });
+      syncMapFilter();
+    }
     const forced = new URLSearchParams(location.search).get('dither');
     if (forced === '0' || forced === '1') enabled = forced === '1';
     else { try { const saved = localStorage.getItem(STORE); if (saved !== null) enabled = saved === '1'; } catch (_) {} }

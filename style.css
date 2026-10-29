@@ -29,6 +29,7 @@ html, body {
   width: min(100vw, 133.333vh);
   height: min(100vh, 75vw);
   overflow: hidden;
+  background: #000;
 }
 
 #scene-wrap {
@@ -132,7 +133,6 @@ html, body {
   position: absolute;
   inset: 0;
   transform-origin: 0 0;
-  will-change: transform;
   opacity: 0;
 }
 /* A 560-cell mosaic is enlarged without smoothing, then palette-dithered
