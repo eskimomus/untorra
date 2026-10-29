@@ -1,0 +1,157 @@
+/* Authoring tools only (see editor.js). None of this ships with the game:
+   nothing here is rendered until Shift+C or Shift+N adds .editing. */
+
+#editor-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 125;          /* over the scene and its hotspots, under the fade */
+  display: none;
+  cursor: crosshair;
+}
+body.editing #editor-layer { display: block; }
+body.editing #collider-layer { pointer-events: none; }
+
+.ed-rect {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px solid var(--c);
+  background: color-mix(in srgb, var(--c) 22%, transparent);
+  cursor: move;
+}
+.ed-rect.on {
+  border-width: 2px;
+  background: color-mix(in srgb, var(--c) 38%, transparent);
+  box-shadow: 0 0 0 1px #000, 0 0 12px color-mix(in srgb, var(--c) 60%, transparent);
+}
+.ed-rect > span {
+  position: absolute;
+  left: 0;
+  top: -16px;
+  padding: 0 3px;
+  font: 11px/15px ui-monospace, Menlo, monospace;
+  color: #fff;
+  background: var(--c);
+  white-space: nowrap;
+  pointer-events: none;
+}
+/* Resize grips — eight of them, so a box can be pulled from any side, but
+   only on the selected box; on all of them at once the screen is unreadable. */
+.ed-rect > i.h { display: none; }
+.ed-rect.on > i.h {
+  display: block;
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  background: var(--c);
+  border: 1px solid #000;
+}
+.ed-rect > i.nw { left: -5px;  top: -5px;    cursor: nwse-resize; }
+.ed-rect > i.n  { left: 50%;   top: -5px;    margin-left: -5px; cursor: ns-resize; }
+.ed-rect > i.ne { right: -5px; top: -5px;    cursor: nesw-resize; }
+.ed-rect > i.e  { right: -5px; top: 50%;     margin-top: -5px; cursor: ew-resize; }
+.ed-rect > i.se { right: -5px; bottom: -5px; cursor: nwse-resize; }
+.ed-rect > i.s  { left: 50%;   bottom: -5px; margin-left: -5px; cursor: ns-resize; }
+.ed-rect > i.sw { left: -5px;  bottom: -5px; cursor: nesw-resize; }
+.ed-rect > i.w  { left: -5px;  top: 50%;     margin-top: -5px; cursor: ew-resize; }
+
+/* Shown only while a drag is latched onto something, so they read as
+   "this is what you just lined up with" rather than permanent rulers. */
+.ed-guide {
+  position: absolute;
+  background: #fff;
+  opacity: .8;
+  pointer-events: none;
+}
+.ed-guide.x { top: 0; bottom: 0; width: 1px; }
+.ed-guide.y { left: 0; right: 0; height: 1px; }
+
+.ed-mark {
+  position: absolute;
+  width: 5%;                      /* same 32px box the game draws */
+  aspect-ratio: 1;
+  transform: translate(-50%, -50%);
+  cursor: move;
+}
+.ed-mark img {
+  width: 100%;
+  image-rendering: pixelated;
+  pointer-events: none;
+}
+.ed-mark.on { outline: 1px dashed #fff; }
+.ed-mark > span {
+  position: absolute;
+  left: 50%;
+  top: 100%;
+  transform: translateX(-50%);
+  font: 11px/15px ui-monospace, Menlo, monospace;
+  color: #fff;
+  background: #000a;
+  padding: 0 3px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+#editor-panel {
+  position: fixed;
+  right: 12px;
+  top: 12px;
+  width: 290px;
+  max-height: calc(100vh - 24px);
+  overflow: auto;
+  z-index: 400;
+  display: none;
+  padding: 10px;
+  background: #16161a;
+  border: 1px solid #3a3a42;
+  color: #e6e6ea;
+  font: 12px/1.45 ui-monospace, Menlo, monospace;
+}
+body.editing #editor-panel { display: block; }
+#editor-panel h2 { margin: 0; font-size: 13px; letter-spacing: .08em; text-transform: uppercase; cursor: pointer; }
+#editor-panel h2 + * { margin-top: 8px; }
+#editor-panel.folded > *:not(h2) { display: none; }
+#editor-panel.folded { width: auto; }
+#editor-panel label { display: block; margin-bottom: 8px; color: #9a9aa6; }
+#editor-panel select { width: 100%; margin-top: 3px; padding: 3px; background: #0e0e11; color: #e6e6ea; border: 1px solid #3a3a42; font: inherit; }
+
+.ed-list { max-height: 40vh; overflow: auto; margin-bottom: 8px; border: 1px solid #2a2a31; }
+.ed-item { display: flex; align-items: center; gap: 6px; padding: 3px 5px; cursor: pointer; }
+.ed-item:hover { background: #22222a; }
+.ed-item.on { background: #2f3550; }
+.ed-item i { width: 10px; height: 10px; flex: none; }
+.ed-item b { flex: none; width: 14px; color: #9a9aa6; font-weight: normal; }
+.ed-item span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ed-item em { flex: none; color: #7a7a86; font-style: normal; }
+.ed-item em.warn { color: #e07070; }   /* an action with no box is unreachable */
+
+.ed-coords { display: flex; gap: 5px; margin-bottom: 6px; }
+.ed-coords label { flex: 1; display: flex; align-items: center; gap: 3px; margin: 0; color: #9a9aa6; }
+.ed-coords input { width: 100%; min-width: 0; padding: 3px; background: #0e0e11; color: #e6e6ea; border: 1px solid #3a3a42; font: inherit; }
+.ed-coords input:disabled { opacity: .4; }
+/* the number spinners eat the width these fields do not have */
+.ed-coords input::-webkit-outer-spin-button,
+.ed-coords input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+
+.ed-row { display: flex; gap: 5px; margin-bottom: 6px; }
+/* making a transition the game does not have yet */
+.ed-new { margin-bottom: 6px; padding-top: 6px; border-top: 1px solid #2a2a31; }
+.ed-new select { width: 100%; margin-bottom: 5px; padding: 3px; background: #0e0e11; color: #e6e6ea; border: 1px solid #3a3a42; font: inherit; }
+.ed-new .ed-row { margin-bottom: 0; }
+.ed-empty { padding: 6px; color: #8a8a96; }
+/* not in the game's data until the export is baked in: * added here,
+   ~ an existing transition whose target or direction was changed */
+.ed-item.new b::after { content: '*'; color: #d8a93f; }
+.ed-item.edited b::after { content: '~'; color: #d8a93f; }
+#editor-panel button:disabled, #editor-panel select:disabled { opacity: .4; cursor: default; }
+/* adding and deleting boxes means nothing when a marker is one point */
+#editor-panel.nav-mode .ed-boxonly { display: none; }
+#editor-panel button { flex: 1; padding: 4px 2px; background: #24242c; color: #e6e6ea; border: 1px solid #3a3a42; font: inherit; cursor: pointer; }
+#editor-panel button:hover { background: #30303a; }
+#editor-panel button.ed-wide { flex: 1 0 100%; }
+.ed-note { margin: 6px 0 0; color: #8a8a96; }
+
+#editor-panel:not(.nav-mode) .ed-navonly { display: none; }
+
+.ed-item.hidden-mark em { color: #e08a3f; }
+
+#editor-panel .ed-markicon { width: 100%; }
