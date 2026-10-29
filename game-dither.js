@@ -3,7 +3,8 @@
  */
 (() => {
   'use strict';
-  const STORE = 'untorra-full-dither-test';
+  const IS_SAFARI = /Version\/[\d.]+.*Safari\//.test(navigator.userAgent) && !/Chrome|Chromium|CriOS|FxiOS|Edg|OPR|OPiOS|Android/.test(navigator.userAgent);
+  const STORE = IS_SAFARI ? 'untorra-full-dither-safari' : 'untorra-full-dither-test';
   const MIX_STORE = 'untorra-full-dither-mix';
   const NOISE_STORE = 'untorra-screen-noise';
   const CRT_STORE = 'untorra-crt-scanlines';
@@ -63,7 +64,7 @@
     vignette: { label: 'сила виньетки', aria: 'Сила виньетки' },
     vignetteSize: { label: 'размер виньетки', aria: 'Размер виньетки' },
   };
-  let enabled = true, mix = 0.32, noise = 0.38, crt = 0.1, bloom = 0.75;
+  let enabled = !IS_SAFARI, mix = 0.32, noise = 0.38, crt = 0.1, bloom = 0.75;
   let stage, filter, mixNode, controls, enabledInput;
   let bloomHighlightsNode, bloomBlurNode;
   let scanlineLayer, noiseLayer, noiseTexture, pipelineKey = '';
