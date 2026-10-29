@@ -34,7 +34,7 @@ const NOTE_BOOST = Math.pow(10, 10 / 20);
 // context unlock. Falls back to the old path only while a buffer is still
 // decoding, so early clicks aren't silent.
 const sfxBuffers = {};
-function playOneShot(file, vol) {
+function playOneShot(file, vol, rhythm = false) {
   const boost = /^note [1-4]\.ogg$/.test(file) ? NOTE_BOOST : 1;
   const volume = (vol ?? 1) * ONESHOT_VOL * boost;
   const buffer = sfxBuffers[file];
@@ -45,12 +45,21 @@ function playOneShot(file, vol) {
     const gainNode = audioCtx.createGain();
     gainNode.gain.value = volume;
     src.connect(gainNode);
-    gainNode.connect(audioCtx.destination);
+    if (rhythm && !rhythmGainNode) {
+      rhythmGainNode = audioCtx.createGain();
+      rhythmGainNode.gain.value = rhythmVolume;
+      rhythmGainNode.connect(audioCtx.destination);
+    }
+    gainNode.connect(rhythm ? rhythmGainNode : audioCtx.destination);
     src.start(0);
     return src;
   }
   const audio = new Audio(sound(file));
-  audio.volume = volume;
+  audio.volume = volume * (rhythm ? rhythmVolume : 1);
+  if (rhythm) {
+    rhythmFallbackAudio.set(audio, volume);
+    audio.addEventListener('ended', () => rhythmFallbackAudio.delete(audio), { once: true });
+  }
   audio.play().catch(() => {});
   return audio;
 }
@@ -69,7 +78,10 @@ const state = {
   cableButtons: [null, null, null, null, null, null, null, null],
   cablesSolved: false,
   towerButtons: new Array(25).fill(false),
-  towerSolved: false
+  towerSolved: false,
+  // minimap: the pin the player last passed through, and every pin seen so far
+  mapNode: null,
+  explored: []
 };
 
 // ---- Looping ambience beds, crossfaded per node (2s per the spec) ----
@@ -122,6 +134,7 @@ const TOWER_NODES = new Set([
 // the spec (asymmetric, unlike the ambience beds' symmetric 2s crossfade) ----
 const MUSIC_FADE_IN_MS = 10000;
 const MUSIC_FADE_OUT_MS = 2000;
+const MAP_AUDIO_FADE_MS = 1000;
 const MUSIC_BARBERSHOP_VOL = Math.pow(10, -7 / 20); // barbershop track is 7dB quieter than the other 3
 const MUSIC_JAZZ_VOL = Math.pow(10, -7 / 20); // jazz track is also 7dB quieter than its original level
 
@@ -135,7 +148,8 @@ const MUSIC_FILES = {
   // now. 'ending' is still loaded here (so its buffer is decoded and ready)
   // but is no longer part of the zone system below — see openEndingMenu()/
   // playEndingFromStart(), it's triggered as a one-off hard restart instead.
-  ending: 'final ending.ogg'
+  ending: 'final ending.ogg',
+  map: 'map noise.ogg'
 };
 
 const MUSIC_JAZZ_NODES = new Set([
@@ -163,6 +177,8 @@ const MUSIC_INDUSTRIAL_NODES = new Set([
 // sample-accurately with zero gap, and is never paused — only its GainNode's
 // volume moves, so re-entering a zone is instant, not a restart.
 let audioCtx = null;
+let rhythmGainNode = null, rhythmVolume = 1;
+const rhythmFallbackAudio = new Map();
 const ambientTracks = {};
 
 // The source .ogg loops weren't recorded with a matching start/end sample —
@@ -261,7 +277,9 @@ function renderLoadingPercent() {
   });
 }
 function stopLoadingIndicator() {
-  document.getElementById('loading-indicator').classList.add('hidden');
+  const indicator = document.getElementById('loading-indicator');
+  indicator.classList.add('hidden');
+  indicator.hidden = true;
 }
 
 // Fetch + decode with retries. A transient failure here used to be fatal
@@ -337,12 +355,28 @@ function setAmbient(key, target, fadeMs) {
   g.linearRampToValueAtTime(target, now + fadeMs / 1000);
 }
 
-function updateAmbience(nodeId) {
-  setAmbient('cave', CAVE_NODES.has(nodeId) ? AMBIENT_MASTER_VOL : 0, AMBIENT_FADE_MS);
-  setAmbient('seaWind', SEA_WIND_NODES.has(nodeId) ? AMBIENT_MASTER_VOL : 0, AMBIENT_FADE_MS);
-  setAmbient('seaWaves', SEA_WAVES_FULL.has(nodeId) ? AMBIENT_MASTER_VOL : SEA_WAVES_QUIET.has(nodeId) ? AMBIENT_QUIET_VOL : 0, AMBIENT_FADE_MS);
-  setAmbient('buzz', BUZZ_FULL.has(nodeId) ? AMBIENT_MASTER_VOL : BUZZ_QUIET.has(nodeId) ? AMBIENT_QUIET_VOL : 0, AMBIENT_FADE_MS);
-  setAmbient('greenhouseWind', (GREENHOUSE_WIND_FULL.has(nodeId) || TOWER_NODES.has(nodeId)) ? AMBIENT_MASTER_VOL : GREENHOUSE_WIND_QUIET.has(nodeId) ? AMBIENT_QUIET_VOL : 0, AMBIENT_FADE_MS);
+function setRhythmVolume(target, fadeMs = 200) {
+  rhythmVolume = target;
+  if (rhythmGainNode) {
+    const now = audioCtx.currentTime;
+    const gain = rhythmGainNode.gain;
+    gain.cancelScheduledValues(now);
+    gain.setValueAtTime(gain.value, now);
+    gain.linearRampToValueAtTime(target, now + fadeMs / 1000);
+  }
+  for (const [audio, volume] of rhythmFallbackAudio) audio.volume = volume * target;
+}
+
+function updateAmbience(nodeId, fadeMs = AMBIENT_FADE_MS) {
+  if (minimapOpen) {
+    for (const key in ambientTracks) setAmbient(key, 0, MAP_AUDIO_FADE_MS);
+    return;
+  }
+  setAmbient('cave', CAVE_NODES.has(nodeId) ? AMBIENT_MASTER_VOL : 0, fadeMs);
+  setAmbient('seaWind', SEA_WIND_NODES.has(nodeId) ? AMBIENT_MASTER_VOL : 0, fadeMs);
+  setAmbient('seaWaves', SEA_WAVES_FULL.has(nodeId) ? AMBIENT_MASTER_VOL : SEA_WAVES_QUIET.has(nodeId) ? AMBIENT_QUIET_VOL : 0, fadeMs);
+  setAmbient('buzz', BUZZ_FULL.has(nodeId) ? AMBIENT_MASTER_VOL : BUZZ_QUIET.has(nodeId) ? AMBIENT_QUIET_VOL : 0, fadeMs);
+  setAmbient('greenhouseWind', (GREENHOUSE_WIND_FULL.has(nodeId) || TOWER_NODES.has(nodeId)) ? AMBIENT_MASTER_VOL : GREENHOUSE_WIND_QUIET.has(nodeId) ? AMBIENT_QUIET_VOL : 0, fadeMs);
 
   // Grows louder frame by frame through the ending sequence (final_1..12),
   // peaking at full volume right as final_12 is reached; silent everywhere
@@ -350,7 +384,7 @@ function updateAmbience(nodeId) {
   const finalMatch = /^final_(\d+)$/.exec(nodeId);
   const finalN = finalMatch ? parseInt(finalMatch[1], 10) : null;
   const finalNoiseTarget = (finalN >= 1 && finalN <= 12) ? (finalN / 12) * AMBIENT_MASTER_VOL * FINAL_NOISE_BOOST : 0;
-  setAmbient('finalNoise', finalNoiseTarget, AMBIENT_FADE_MS);
+  setAmbient('finalNoise', finalNoiseTarget, fadeMs);
 }
 
 const musicTracks = {};
@@ -365,6 +399,7 @@ function initMusicTracks() {
     musicTracks[key] = t;
     const p = fetchDecodeAudio(musicSound(MUSIC_FILES[key]))
       .then(audioBuffer => {
+        if (key === 'map') smoothLoopEdges(audioBuffer, Math.round(audioCtx.sampleRate * 0.015));
         t.buffer = audioBuffer;
         startTrackSource(t);
       })
@@ -386,11 +421,17 @@ function setMusic(key, target, fadeMs) {
   g.linearRampToValueAtTime(target, now + fadeMs / 1000);
 }
 
-function updateMusic(nodeId) {
-  setMusic('jazz', MUSIC_JAZZ_NODES.has(nodeId) ? MUSIC_JAZZ_VOL : 0, MUSIC_JAZZ_NODES.has(nodeId) ? MUSIC_FADE_IN_MS : MUSIC_FADE_OUT_MS);
-  setMusic('barbershop', MUSIC_BARBERSHOP_NODES.has(nodeId) ? MUSIC_BARBERSHOP_VOL : 0, MUSIC_BARBERSHOP_NODES.has(nodeId) ? MUSIC_FADE_IN_MS : MUSIC_FADE_OUT_MS);
-  setMusic('greenhouse', MUSIC_GREENHOUSE_NODES.has(nodeId) ? 1 : 0, MUSIC_GREENHOUSE_NODES.has(nodeId) ? MUSIC_FADE_IN_MS : MUSIC_FADE_OUT_MS);
-  setMusic('industrial', MUSIC_INDUSTRIAL_NODES.has(nodeId) ? 1 : 0, MUSIC_INDUSTRIAL_NODES.has(nodeId) ? MUSIC_FADE_IN_MS : MUSIC_FADE_OUT_MS);
+function updateMusic(nodeId, fadeMs) {
+  setMusic('map', minimapOpen ? 1 : 0, MAP_AUDIO_FADE_MS);
+  if (minimapOpen) {
+    for (const key in musicTracks) if (key !== 'map') setMusic(key, 0, MAP_AUDIO_FADE_MS);
+    return;
+  }
+  const fadeIn = fadeMs ?? MUSIC_FADE_IN_MS, fadeOut = fadeMs ?? MUSIC_FADE_OUT_MS;
+  setMusic('jazz', MUSIC_JAZZ_NODES.has(nodeId) ? MUSIC_JAZZ_VOL : 0, MUSIC_JAZZ_NODES.has(nodeId) ? fadeIn : fadeOut);
+  setMusic('barbershop', MUSIC_BARBERSHOP_NODES.has(nodeId) ? MUSIC_BARBERSHOP_VOL : 0, MUSIC_BARBERSHOP_NODES.has(nodeId) ? fadeIn : fadeOut);
+  setMusic('greenhouse', MUSIC_GREENHOUSE_NODES.has(nodeId) ? 1 : 0, MUSIC_GREENHOUSE_NODES.has(nodeId) ? fadeIn : fadeOut);
+  setMusic('industrial', MUSIC_INDUSTRIAL_NODES.has(nodeId) ? 1 : 0, MUSIC_INDUSTRIAL_NODES.has(nodeId) ? fadeIn : fadeOut);
   // 'ending' is deliberately not driven by node membership here — see
   // openEndingMenu()/playEndingFromStart(), triggered once as a hard
   // restart instead of a normal zone crossfade.
@@ -543,68 +584,68 @@ function buildTowerHotspots() {
 // green=left/right (or back/forward, or turn-around — see COLLIDER_KEY),
 // blue=forward, yellow=alternate path, red=interact, magenta=sound-only.
 const COLLIDER_DATA = {
-  "tunnel1_a_back": { map: "assets/colliders/tunnel1_a_back.png", actions: [null, {"to": "hub", "cursor": "front"}, {"to": "tunnel1_a_front", "cursor": "back"}] },
-  "tunnel1_b_front": { map: "assets/colliders/tunnel1_b_front.png", actions: [null, {"to": "beach_a_front", "cursor": "front"}, {"to": "tunnel1_b_back", "cursor": "back"}] },
-  "tunnel1_b_back": { map: "assets/colliders/tunnel1_b_back.png", actions: [null, {"to": "tunnel1_a_back", "cursor": "front"}, {"to": "tunnel1_b_front", "cursor": "back"}] },
-  "tunnel1_a_front": { map: "assets/colliders/tunnel1_a_front.png", actions: [null, {"to": "tunnel1_a_back", "cursor": "left"}, {"to": "tunnel1_b_front", "cursor": "front"}] },
-  "beach_a_front": { map: "assets/colliders/beach_a_front.png", actions: [null, {"to": "beach_b_front", "cursor": "front"}, {"to": "beach_a_back", "cursor": "back"}] },
-  "beach_a_back": { map: "assets/colliders/beach_a_back.png", actions: [null, {"to": "tunnel1_b_back", "cursor": "front"}, {"to": "beach_a_front", "cursor": "back"}] },
-  "beach_b_front": { map: "assets/colliders/beach_b_front.png", actions: [null, {"to": "beach_b_left", "cursor": "left"}, {"to": "beach_b_right", "cursor": "right"}, {"to": "ezh_inside", "cursor": "front"}] },
-  "beach_b_back": { map: "assets/colliders/beach_b_back.png", actions: [null, {"to": "beach_a_back", "cursor": "front"}, {"to": "beach_b_right", "cursor": "left"}, {"to": "beach_b_left", "cursor": "right"}] },
-  "beach_b_left": { map: "assets/colliders/beach_b_left.png", actions: [null, {"to": "beach_b_back", "cursor": "left"}, {"to": "beach_b_front", "cursor": "right"}, {"to": "storgage_view", "cursor": "front"}] },
-  "beach_b_right": { map: "assets/colliders/beach_b_right.png", actions: [null, {"to": "beach_b_front", "cursor": "left"}, {"to": "beach_b_back", "cursor": "right"}] },
-  "ezh_inside": { map: "assets/colliders/ezh_inside.png", actions: [null, {"to": "ezh_inside2", "cursor": "front"}, {"to": "beach_b_front", "cursor": "back"}] },
-  "ezh_inside2": { map: "assets/colliders/ezh_inside2.png", actions: [null, {"to": "ezh_mayak", "cursor": "front"}, {"to": "ezh_inside", "cursor": "left"}, {"to": "ezh_sea", "cursor": "right"}] },
-  "ezh_mayak": { map: "assets/colliders/ezh_mayak.png", actions: [null, {"to": "ezh_sea", "cursor": "front"}, {"to": "ezh_inside2", "cursor": "back"}] },
+  "tunnel1_a_back": { map: "assets/colliders/tunnel1_a_back.png?v=4", actions: [null, {"to": "hub", "cursor": "front"}, {"to": "tunnel1_a_front", "cursor": "back"}, {"to": "tunnel1_a_front", "cursor": "left"}, {"to": "tunnel1_a_front", "cursor": "right"}] },
+  "tunnel1_b_front": { map: "assets/colliders/tunnel1_b_front.png?v=4", actions: [null, {"to": "beach_a_front", "cursor": "front"}, {"to": "tunnel1_b_back", "cursor": "back"}, {"to": "tunnel1_b_back", "cursor": "right"}] },
+  "tunnel1_b_back": { map: "assets/colliders/tunnel1_b_back.png?v=4", actions: [null, {"to": "tunnel1_a_back", "cursor": "front"}, {"to": "tunnel1_b_front", "cursor": "back"}, {"to": "tunnel1_b_front", "cursor": "left"}, {"to": "tunnel1_b_front", "cursor": "right"}] },
+  "tunnel1_a_front": { map: "assets/colliders/tunnel1_a_front.png?v=4", actions: [null, {"to": "tunnel1_a_back", "cursor": "left"}, {"to": "tunnel1_b_front", "cursor": "front"}, {"to": "tunnel1_a_back", "cursor": "back"}] },
+  "beach_a_front": { map: "assets/colliders/beach_a_front.png?v=4", actions: [null, {"to": "beach_b_front", "cursor": "front"}, {"to": "beach_a_back", "cursor": "back"}, {"to": "beach_a_back", "cursor": "left"}, {"to": "beach_a_back", "cursor": "right"}] },
+  "beach_a_back": { map: "assets/colliders/beach_a_back.png?v=4", actions: [null, {"to": "tunnel1_b_back", "cursor": "front"}, {"to": "beach_a_front", "cursor": "back"}, {"to": "beach_a_front", "cursor": "left"}, {"to": "beach_a_front", "cursor": "right"}] },
+  "beach_b_front": { map: "assets/colliders/beach_b_front.png?v=6", actions: [null, {"to": "beach_b_left", "cursor": "left"}, {"to": "beach_b_right", "cursor": "right"}, {"to": "ezh_inside", "cursor": "front"}, {"to": "beach_a_front", "cursor": "back"}] },
+  "beach_b_back": { map: "assets/colliders/beach_b_back.png?v=6", actions: [null, {"to": "beach_a_back", "cursor": "front"}, {"to": "beach_b_right", "cursor": "left"}, {"to": "beach_b_left", "cursor": "right"}, {"to": "beach_b_left", "cursor": "back"}] },
+  "beach_b_left": { map: "assets/colliders/beach_b_left.png?v=4", actions: [null, {"to": "beach_b_back", "cursor": "left"}, {"to": "beach_b_front", "cursor": "right"}, {"to": "storgage_view", "cursor": "front"}, {"to": "beach_b_back", "cursor": "back"}] },
+  "beach_b_right": { map: "assets/colliders/beach_b_right.png?v=4", actions: [null, {"to": "beach_b_front", "cursor": "left"}, {"to": "beach_b_back", "cursor": "right"}, {"to": "beach_b_front", "cursor": "back"}] },
+  "ezh_inside": { map: "assets/colliders/ezh_inside.png?v=4", actions: [null, {"to": "ezh_inside2", "cursor": "front"}, {"to": "beach_b_front", "cursor": "back"}, {"to": "beach_b_front", "cursor": "left"}, {"to": "beach_b_front", "cursor": "right"}] },
+  "ezh_inside2": { map: "assets/colliders/ezh_inside2.png?v=4", actions: [null, {"to": "ezh_mayak", "cursor": "front"}, {"to": "ezh_inside", "cursor": "left"}, {"to": "ezh_sea", "cursor": "right"}, {"to": "ezh_inside", "cursor": "back"}] },
+  "ezh_mayak": { map: "assets/colliders/ezh_mayak.png?v=5", actions: [null, {"to": "ezh_sea", "cursor": "front"}, {"to": "ezh_inside2", "cursor": "back"}, {"to": "ezh_inside2", "cursor": "left"}, {"to": "ezh_inside2", "cursor": "right"}] },
   "ezh_sea": { map: "assets/colliders/ezh_sea.png", actions: [null, {"to": "ezh_inside2", "cursor": "back"}] },
-  "storgage_view": { map: "assets/colliders/storgage_view.png", actions: [null, {"to": "beach_b_left", "cursor": "back"}] },
-  "hub": { map: "assets/colliders/hub.png", actions: [null, {"to": "first_portal", "cursor": "left"}, {"to": "third_gate", "cursor": "right"}, {"to": "second_door", "cursor": "front"}, {"to": "lever_view", "cursor": "front"}] },
-  "lever_view": { map: "assets/colliders/lever_view.png", actions: [null, {"to": "second_door", "cursor": "left"}, {"to": "third_gate", "cursor": "right"}, {"action": "toggleLever", "cursor": "grab"}] },
-  "second_door": { map: "assets/colliders/second_door.png", actions: [null, {"to": "tunnel2_1_1", "cursor": "front"}, {"to": "first_portal", "cursor": "left"}, {"to": "lever_view", "cursor": "right"}] },
-  "first_portal": { map: "assets/colliders/first_portal.png", actions: [null, {"to": "hub", "cursor": "left"}, {"to": "tunnel1_a_front", "cursor": "front"}, {"to": "second_door", "cursor": "right"}] },
-  "third_gate__closed": { map: "assets/colliders/third_gate__closed.png", actions: [null, {"to": "hub", "cursor": "back"}, {"action": "toggleLever", "cursor": "grab"}, {"sound": "door hit.ogg", "cursor": "grab"}] },
-  "third_gate__open": { map: "assets/colliders/third_gate__open.png", actions: [null, {"to": "hub", "cursor": "back"}, {"to": "tunnel3_1_1", "cursor": "front"}, {"action": "toggleLever", "cursor": "grab"}] },
-  "tunnel2_1_1": { map: "assets/colliders/tunnel2_1_1.png", actions: [null, {"to": "tunnel2_2_1", "cursor": "front"}, {"to": "tunnel2_1_2", "cursor": "back"}] },
-  "tunnel2_1_2": { map: "assets/colliders/tunnel2_1_2.png", actions: [null, {"to": "hub", "cursor": "front"}, {"to": "tunnel2_1_1", "cursor": "back"}] },
-  "tunnel2_2_1": { map: "assets/colliders/tunnel2_2_1.png", actions: [null, {"to": "room2_1_1", "cursor": "front"}, {"to": "tunnel2_2_2", "cursor": "back"}] },
-  "tunnel2_2_2": { map: "assets/colliders/tunnel2_2_2.png", actions: [null, {"to": "tunnel2_1_2", "cursor": "front"}, {"to": "tunnel2_2_1", "cursor": "back"}] },
-  "room2_1_2": { map: "assets/colliders/room2_1_2.png", actions: [null, {"to": "tunnel2_2_2", "cursor": "front"}, {"to": "room2_1_1", "cursor": "back"}] },
-  "room2_1_1": { map: "assets/colliders/room2_1_1.png", actions: [null, {"to": "room2_1_3", "cursor": "left"}, {"to": "room2_1_2", "cursor": "right"}, {"to": "room2_2_1", "cursor": "front"}, {"to": "cables_1", "cursor": "front"}, {"to": "room2_1_5", "cursor": "front"}, {"to": "room2_1_2", "cursor": "back"}] },
+  "storgage_view": { map: "assets/colliders/storgage_view.png?v=4", actions: [null, {"to": "beach_b_left", "cursor": "back"}, {"to": "beach_b_left", "cursor": "right"}, {"to": "beach_b_left", "cursor": "left"}] },
+  "hub": { map: "assets/colliders/hub.png?v=2", actions: [null, {"to": "first_portal", "cursor": "left"}, {"to": "third_gate", "cursor": "right"}, {"to": "second_door", "cursor": "front"}, {"to": "lever_view", "cursor": "front"}] },
+  "lever_view": { map: "assets/colliders/lever_view.png?v=4", actions: [null, {"to": "second_door", "cursor": "left"}, {"to": "third_gate", "cursor": "right"}, {"action": "toggleLever", "cursor": "grab"}, {"to": "hub", "cursor": "back"}] },
+  "second_door": { map: "assets/colliders/second_door.png?v=4", actions: [null, {"to": "tunnel2_1_1", "cursor": "front"}, {"to": "first_portal", "cursor": "left"}, {"to": "lever_view", "cursor": "right"}, {"to": "hub", "cursor": "back"}] },
+  "first_portal": { map: "assets/colliders/first_portal.png?v=5", actions: [null, {"to": "hub", "cursor": "left"}, {"to": "tunnel1_a_front", "cursor": "front"}, {"to": "second_door", "cursor": "right"}, {"to": "hub", "cursor": "back"}] },
+  "third_gate__closed": { map: "assets/colliders/third_gate__closed.png?v=7", actions: [null, {"to": "hub", "cursor": "back"}, {"action": "toggleLever", "cursor": "grab"}, {"sound": "door hit.ogg", "cursor": "grab"}, {"to": "hub", "cursor": "right"}, {"to": "second_door", "cursor": "right"}] },
+  "third_gate__open": { map: "assets/colliders/third_gate__open.png?v=5", actions: [null, {"to": "hub", "cursor": "back"}, {"to": "tunnel3_1_1", "cursor": "front"}, {"action": "toggleLever", "cursor": "grab"}, {"to": "hub", "cursor": "right"}, {"to": "second_door", "cursor": "left"}] },
+  "tunnel2_1_1": { map: "assets/colliders/tunnel2_1_1.png?v=4", actions: [null, {"to": "tunnel2_2_1", "cursor": "front"}, {"to": "tunnel2_1_2", "cursor": "back"}, {"to": "hub", "cursor": "back"}, {"to": "tunnel2_1_2", "cursor": "left"}, {"to": "tunnel2_1_2", "cursor": "right"}] },
+  "tunnel2_1_2": { map: "assets/colliders/tunnel2_1_2.png?v=4", actions: [null, {"to": "hub", "cursor": "front"}, {"to": "tunnel2_1_1", "cursor": "back"}, {"to": "tunnel2_1_1", "cursor": "left"}, {"to": "tunnel2_1_1", "cursor": "right"}] },
+  "tunnel2_2_1": { map: "assets/colliders/tunnel2_2_1.png?v=4", actions: [null, {"to": "room2_1_1", "cursor": "front"}, {"to": "tunnel2_2_2", "cursor": "back"}, {"to": "tunnel2_2_2", "cursor": "left"}, {"to": "tunnel2_2_2", "cursor": "right"}] },
+  "tunnel2_2_2": { map: "assets/colliders/tunnel2_2_2.png?v=4", actions: [null, {"to": "tunnel2_1_2", "cursor": "front"}, {"to": "tunnel2_2_1", "cursor": "back"}, {"to": "tunnel2_2_1", "cursor": "left"}, {"to": "tunnel2_2_1", "cursor": "right"}] },
+  "room2_1_2": { map: "assets/colliders/room2_1_2.png?v=4", actions: [null, {"to": "tunnel2_2_2", "cursor": "front"}, {"to": "room2_1_1", "cursor": "left"}, {"to": "room2_1_1", "cursor": "right"}] },
+  "room2_1_1": { map: "assets/colliders/room2_1_1.png?v=4", actions: [null, {"to": "room2_1_3", "cursor": "right"}, {"to": "room2_1_2", "cursor": "right"}, {"to": "room2_2_1", "cursor": "front"}, {"to": "cables_1", "cursor": "front"}, {"to": "room2_1_5", "cursor": "front"}, {"to": "room2_1_2", "cursor": "back"}, {"to": "room2_1_2", "cursor": "back"}, {"to": "room2_1_2", "cursor": "left"}] },
   "room2_1_3": { map: "assets/colliders/room2_1_3.png", actions: [null, {"to": "room2_1_1", "cursor": "back"}] },
-  "room2_1_5": { map: "assets/colliders/room2_1_5.png", actions: [null, {"to": "room2_1_1", "cursor": "back"}, {"to": "room2_2_1", "cursor": "front"}, {"to": "cables_1", "cursor": "front"}] },
-  "room2_2_1": { map: "assets/colliders/room2_2_1.png", actions: [null, {"to": "lift_1_1", "cursor": "front"}, {"to": "room2_1_1", "cursor": "back"}] },
-  "cables_1": { map: "assets/colliders/cables_1.png", actions: [null, {"to": "room2_1_1", "cursor": "back"}, {"to": "cables_2a", "cursor": "front"}, {"to": "room2_2_1", "cursor": "front"}] },
-  "cables_2a": { map: "assets/colliders/cables_2a.png", actions: [null, {"to": "cables_3", "cursor": "front"}, {"to": "cables_2b", "cursor": "back"}] },
-  "cables_2b": { map: "assets/colliders/cables_2b.png", actions: [null, {"to": "room2_1_2", "cursor": "front"}, {"to": "cables_2a", "cursor": "back"}, {"to": "cables_2a", "cursor": "front"}] },
-  "cables_3": { map: "assets/colliders/cables_3.png", actions: [null, {"to": "cables_2b", "cursor": "back"}] },
-  "lift_1_1": { map: "assets/colliders/lift_1_1.png", actions: [null, {"to": "lift_1_2", "cursor": "left"}, {"to": "lift_2_1", "cursor": "front"}] },
-  "lift_1_2": { map: "assets/colliders/lift_1_2.png", actions: [null, {"to": "room2_1_2", "cursor": "front"}, {"to": "lift_1_1", "cursor": "back"}] },
-  "lift_2_2": { map: "assets/colliders/lift_2_2.png", actions: [null, {"to": "lift_1_2", "cursor": "front"}, {"to": "lift_2_1", "cursor": "back"}] },
-  "lift_2_1__green": { map: "assets/colliders/lift_2_1__green.png", actions: [null, {"to": "lift_2_2", "cursor": "back"}, {"to": "lift_3_1", "cursor": "front"}, {"to": "lift_panel", "cursor": "front"}] },
-  "lift_2_1__red": { map: "assets/colliders/lift_2_1__red.png?v=2", actions: [null, {"to": "lift_2_2", "cursor": "back"}, {"sound": "door hit.ogg", "cursor": "grab"}, {"to": "lift_panel", "cursor": "front"}] },
+  "room2_1_5": { map: "assets/colliders/room2_1_5.png?v=4", actions: [null, {"to": "room2_1_1", "cursor": "back"}, {"to": "room2_2_1", "cursor": "front"}, {"to": "cables_1", "cursor": "front"}] },
+  "room2_2_1": { map: "assets/colliders/room2_2_1.png?v=4", actions: [null, {"to": "lift_1_1", "cursor": "front"}, {"to": "room2_1_1", "cursor": "back"}, {"to": "room2_1_1", "cursor": "left"}, {"to": "cables_1", "cursor": "right"}] },
+  "cables_1": { map: "assets/colliders/cables_1.png?v=4", actions: [null, {"to": "room2_1_1", "cursor": "back"}, {"to": "cables_2a", "cursor": "front"}, {"to": "room2_2_1", "cursor": "left"}] },
+  "cables_2a": { map: "assets/colliders/cables_2a.png?v=5", actions: [null, {"to": "cables_3", "cursor": "front"}, {"to": "cables_2b", "cursor": "back"}, {"to": "cables_2b", "cursor": "left"}, {"to": "cables_2b", "cursor": "right"}] },
+  "cables_2b": { map: "assets/colliders/cables_2b.png?v=5", actions: [null, {"to": "room2_1_1", "cursor": "front"}, {"to": "cables_2a", "cursor": "back"}, {"to": "cables_2a", "cursor": "front"}, {"to": "cables_2a", "cursor": "right"}] },
+  "cables_3": { map: "assets/colliders/cables_3.png?v=4", actions: [null, {"to": "cables_2a", "cursor": "back"}, {"to": "cables_2b", "cursor": "left"}, {"to": "cables_2b", "cursor": "right"}] },
+  "lift_1_1": { map: "assets/colliders/lift_1_1.png?v=4", actions: [null, {"to": "lift_1_2", "cursor": "left"}, {"to": "lift_2_1", "cursor": "front"}, {"to": "lift_1_2", "cursor": "back"}, {"to": "lift_1_2", "cursor": "right"}] },
+  "lift_1_2": { map: "assets/colliders/lift_1_2.png?v=4", actions: [null, {"to": "room2_1_1", "cursor": "front"}, {"to": "lift_1_1", "cursor": "back"}, {"to": "lift_1_1", "cursor": "left"}, {"to": "lift_1_1", "cursor": "right"}] },
+  "lift_2_2": { map: "assets/colliders/lift_2_2.png?v=4", actions: [null, {"to": "lift_1_2", "cursor": "front"}, {"to": "lift_2_1", "cursor": "back"}, {"to": "lift_2_1", "cursor": "left"}, {"to": "lift_2_1", "cursor": "right"}] },
+  "lift_2_1__green": { map: "assets/colliders/lift_2_1__green.png?v=4", actions: [null, {"to": "lift_2_2", "cursor": "back"}, {"to": "lift_3_1", "cursor": "front"}, {"to": "lift_panel", "cursor": "front"}, {"to": "lift_2_2", "cursor": "left"}, {"to": "lift_2_2", "cursor": "right"}] },
+  "lift_2_1__red": { map: "assets/colliders/lift_2_1__red.png?v=4", actions: [null, {"to": "lift_2_2", "cursor": "back"}, {"sound": "door hit.ogg", "cursor": "grab"}, {"to": "lift_panel", "cursor": "front"}] },
   "lift_panel": { map: "assets/colliders/lift_panel.png", actions: [null, {"to": "lift_2_1", "cursor": "back"}] },
-  "greenhouse_1_1": { map: "assets/colliders/greenhouse_1_1.png", actions: [null, {"to": "greenhouse_2_1", "cursor": "front"}, {"to": "lift_3_1", "cursor": "back"}] },
+  "greenhouse_1_1": { map: "assets/colliders/greenhouse_1_1.png?v=4", actions: [null, {"to": "greenhouse_2_1", "cursor": "front"}, {"to": "lift_3_1", "cursor": "back"}] },
   "lift_3_1__fromGreenhouse": { map: "assets/colliders/greenhouse_1_1.png", actions: [null, {"to": "lift_2_2", "cursor": "front"}, {"to": "greenhouse_1_1", "cursor": "back"}] },
-  "greenhouse_2_1": { map: "assets/colliders/greenhouse_2_1.png", actions: [null, {"to": "greenhouse_3_1", "cursor": "front"}, {"to": "greenhouse_2_2", "cursor": "back"}] },
-  "greenhouse_2_2": { map: "assets/colliders/greenhouse_2_2.png", actions: [null, {"to": "greenhouse_1_1", "cursor": "front"}, {"to": "greenhouse_2_1", "cursor": "back"}] },
-  "greenhouse_3_1": { map: "assets/colliders/greenhouse_3_1.png", actions: [null, {"to": "greenhouse_3_2", "cursor": "back"}, {"to": "greenhouse_4_1", "cursor": "front"}, {"to": "greenhouse_3_4", "cursor": "front"}] },
-  "greenhouse_3_2": { map: "assets/colliders/greenhouse_3_2.png", actions: [null, {"to": "greenhouse_2_2", "cursor": "front"}, {"to": "greenhouse_3_1", "cursor": "back"}] },
-  "greenhouse_3_4": { map: "assets/colliders/greenhouse_3_4.png", actions: [null, {"to": "greenhouse_3_1", "cursor": "back"}] },
-  "greenhouse_4_1": { map: "assets/colliders/greenhouse_4_1.png", actions: [null, {"to": "greenhouse_3_1", "cursor": "back"}] },
-  "tunnel3_1_1": { map: "assets/colliders/tunnel3_1_1.png", actions: [null, {"to": "tunnel3_1_2", "cursor": "left"}, {"to": "tunnel3_2_1", "cursor": "front"}] },
-  "tunnel3_1_2": { map: "assets/colliders/tunnel3_1_2.png", actions: [null, {"to": "hub", "cursor": "front"}, {"to": "tunnel3_1_1", "cursor": "back"}] },
-  "tunnel3_2_1": { map: "assets/colliders/tunnel3_2_1.png", actions: [null, {"to": "tower_1_1", "cursor": "front"}, {"to": "tunnel3_2_2", "cursor": "back"}] },
-  "tunnel3_2_2": { map: "assets/colliders/tunnel3_2_2.png", actions: [null, {"to": "tunnel3_1_2", "cursor": "front"}, {"to": "tunnel3_2_1", "cursor": "back"}] },
-  "tower_1_1": { map: "assets/colliders/tower_1_1.png", actions: [null, {"to": "tower_1_2", "cursor": "left"}, {"to": "tower_1_4", "cursor": "right"}, {"to": "tower_2_1", "cursor": "front"}] },
-  "tower_1_2": { map: "assets/colliders/tower_1_2.png?v=2", actions: [null, {"to": "tunnel3_2_2", "cursor": "front"}, {"to": "tower_1_1", "cursor": "back"}, {"to": "tower_1_4", "cursor": "left"}] },
-  "tower_1_4": { map: "assets/colliders/tower_1_4.png?v=2", actions: [null, {"to": "towerlift_1_1", "cursor": "front"}, {"to": "tower_1_1", "cursor": "back"}, {"to": "tower_1_2", "cursor": "right"}] },
-  "tower_2_1": { map: "assets/colliders/tower_2_1.png", actions: [null, {"to": "tower_3_1", "cursor": "front"}, {"to": "tower_2_2", "cursor": "back"}] },
-  "tower_2_2": { map: "assets/colliders/tower_2_2.png", actions: [null, {"to": "tower_1_2", "cursor": "front"}, {"to": "tower_2_1", "cursor": "back"}] },
-  "tower_3_1": { map: "assets/colliders/tower_3_1.png", actions: [null, {"to": "tower_4_1", "cursor": "front"}, {"to": "tower_2_2", "cursor": "back"}] },
+  "greenhouse_2_1": { map: "assets/colliders/greenhouse_2_1.png?v=4", actions: [null, {"to": "greenhouse_3_1", "cursor": "front"}, {"to": "greenhouse_2_2", "cursor": "back"}, {"to": "greenhouse_2_2", "cursor": "left"}, {"to": "greenhouse_2_2", "cursor": "right"}] },
+  "greenhouse_2_2": { map: "assets/colliders/greenhouse_2_2.png?v=4", actions: [null, {"to": "greenhouse_1_1", "cursor": "front"}, {"to": "greenhouse_2_1", "cursor": "back"}] },
+  "greenhouse_3_1": { map: "assets/colliders/greenhouse_3_1.png?v=4", actions: [null, {"to": "greenhouse_3_2", "cursor": "back"}, {"to": "greenhouse_4_1", "cursor": "front"}, {"to": "greenhouse_3_4", "cursor": "front"}] },
+  "greenhouse_3_2": { map: "assets/colliders/greenhouse_3_2.png?v=4", actions: [null, {"to": "greenhouse_2_2", "cursor": "front"}, {"to": "greenhouse_3_1", "cursor": "back"}] },
+  "greenhouse_3_4": { map: "assets/colliders/greenhouse_3_4.png?v=4", actions: [null, {"to": "greenhouse_3_1", "cursor": "back"}] },
+  "greenhouse_4_1": { map: "assets/colliders/greenhouse_4_1.png?v=4", actions: [null, {"to": "greenhouse_3_1", "cursor": "back"}] },
+  "tunnel3_1_1": { map: "assets/colliders/tunnel3_1_1.png?v=4", actions: [null, {"to": "tunnel3_1_2", "cursor": "left"}, {"to": "tunnel3_2_1", "cursor": "front"}, {"to": "lever_view", "cursor": "back"}] },
+  "tunnel3_1_2": { map: "assets/colliders/tunnel3_1_2.png?v=5", actions: [null, {"to": "hub", "cursor": "front"}, {"to": "tunnel3_1_1", "cursor": "back"}, {"to": "tunnel3_1_1", "cursor": "left"}] },
+  "tunnel3_2_1": { map: "assets/colliders/tunnel3_2_1.png?v=4", actions: [null, {"to": "tower_1_1", "cursor": "front"}, {"to": "tunnel3_2_2", "cursor": "back"}, {"to": "tunnel3_2_2", "cursor": "left"}, {"to": "tunnel3_2_2", "cursor": "right"}] },
+  "tunnel3_2_2": { map: "assets/colliders/tunnel3_2_2.png?v=4", actions: [null, {"to": "tunnel3_1_2", "cursor": "front"}, {"to": "tunnel3_2_1", "cursor": "back"}, {"to": "tunnel3_2_1", "cursor": "left"}, {"to": "tunnel3_2_1", "cursor": "right"}] },
+  "tower_1_1": { map: "assets/colliders/tower_1_1.png?v=4", actions: [null, {"to": "tower_1_2", "cursor": "left"}, {"to": "tower_1_4", "cursor": "right"}, {"to": "tower_2_1", "cursor": "front"}, {"to": "tunnel3_2_1", "cursor": "back"}] },
+  "tower_1_2": { map: "assets/colliders/tower_1_2.png?v=5", actions: [null, {"to": "tunnel3_2_2", "cursor": "front"}, {"to": "tower_1_1", "cursor": "back"}, {"to": "tower_1_4", "cursor": "left"}, {"to": "tower_1_1", "cursor": "right"}] },
+  "tower_1_4": { map: "assets/colliders/tower_1_4.png?v=4", actions: [null, {"to": "towerlift_1_1", "cursor": "front"}, {"to": "tower_1_1", "cursor": "back"}, {"to": "tower_1_2", "cursor": "right"}, {"to": "tower_1_1", "cursor": "left"}] },
+  "tower_2_1": { map: "assets/colliders/tower_2_1.png?v=4", actions: [null, {"to": "tower_3_1", "cursor": "front"}, {"to": "tower_2_2", "cursor": "back"}] },
+  "tower_2_2": { map: "assets/colliders/tower_2_2.png?v=4", actions: [null, {"to": "tower_1_2", "cursor": "front"}, {"to": "tower_2_1", "cursor": "back"}, {"to": "tower_2_1", "cursor": "left"}] },
+  "tower_3_1": { map: "assets/colliders/tower_3_1.png?v=4", actions: [null, {"to": "tower_4_1", "cursor": "front"}, {"to": "tower_2_2", "cursor": "back"}, {"to": "tower_2_2", "cursor": "left"}, {"to": "tower_2_2", "cursor": "right"}] },
   "tower_4_1": { map: "assets/colliders/tower_4_1.png", actions: [null, {"to": "tower_3_1", "cursor": "back"}] },
-  "towerlift_1_1": { map: "assets/colliders/towerlift_1_1.png", actions: [null, {"to": "towerlift_2_1", "cursor": "front"}, {"to": "towerlift_1_2", "cursor": "back"}] },
-  "towerlift_1_2": { map: "assets/colliders/towerlift_1_2.png", actions: [null, {"to": "tower_1_1", "cursor": "front"}, {"to": "tower_1_2", "cursor": "left"}, {"to": "tower_1_1", "cursor": "right"}] },
-  "towerlift_2_1": { map: "assets/colliders/towerlift_2_1.png", actions: [null, {"to": "towerlift_1_1", "cursor": "back"}, {"action": "towerliftInteract", "flavor": "Здесь тихо и пусто.", "sound": "button press.ogg", "cursor": "grab"}] },
+  "towerlift_1_1": { map: "assets/colliders/towerlift_1_1.png?v=4", actions: [null, {"to": "towerlift_2_1", "cursor": "front"}, {"to": "towerlift_1_2", "cursor": "back"}, {"to": "towerlift_1_2", "cursor": "left"}, {"to": "towerlift_1_2", "cursor": "right"}] },
+  "towerlift_1_2": { map: "assets/colliders/towerlift_1_2.png?v=5", actions: [null, {"to": "tower_1_1", "cursor": "front"}, {"to": "tower_1_4", "cursor": "left"}, {"to": "tower_1_4", "cursor": "right"}, {"to": "tower_1_4", "cursor": "back"}] },
+  "towerlift_2_1": { map: "assets/colliders/towerlift_2_1.png?v=4", actions: [null, {"to": "towerlift_1_2", "cursor": "right"}, {"action": "towerliftInteract", "flavor": "Здесь тихо и пусто.", "sound": "button press.ogg", "cursor": "grab"}] },
 
   // Ending sequence — no hand-painted reference exists for these, every
   // frame is just one uniform "click anywhere to continue" zone (a single
@@ -661,6 +702,142 @@ function ensureColliderLoaded(path, onDone) {
     if (onDone) onDone();
   };
   im.src = path;
+}
+
+// Bounding box and centroid of every painted region in a collider map, in
+// 0..1 of the source frame. The navigation markers place themselves at the
+// centroids unless a hand-placed position overrides them, and the authoring
+// tools seed their rectangles from the boxes.
+const colliderRegionCache = {};
+function colliderRegions(key) {
+  if (colliderRegionCache[key]) return colliderRegionCache[key];
+  const cfg = COLLIDER_DATA[key];
+  if (!cfg) return null;
+  const data = colliderImageCache[cfg.map];
+  if (!data || data === 'loading') { ensureColliderLoaded(cfg.map); return null; }
+  const acc = {};
+  for (let y = 0; y < data.height; y++) {
+    for (let x = 0; x < data.width; x++) {
+      const v = data.data[(y * data.width + x) * 4];
+      if (!v) continue;
+      const r = acc[v] || (acc[v] = { x0: 1e9, y0: 1e9, x1: -1, y1: -1, n: 0, sx: 0, sy: 0 });
+      if (x < r.x0) r.x0 = x;
+      if (y < r.y0) r.y0 = y;
+      if (x > r.x1) r.x1 = x;
+      if (y > r.y1) r.y1 = y;
+      r.n++; r.sx += x; r.sy += y;
+    }
+  }
+  const out = {};
+  for (const k in acc) {
+    const r = acc[k];
+    out[k] = {
+      box: [r.x0 / data.width, r.y0 / data.height,
+            (r.x1 - r.x0 + 1) / data.width, (r.y1 - r.y0 + 1) / data.height],
+      centroid: [(r.sx / r.n + 0.5) / data.width, (r.sy / r.n + 0.5) / data.height],
+    };
+  }
+  colliderRegionCache[key] = out;
+  return out;
+}
+
+// ensureColliderLoaded calls back straight away when a load is already in
+// flight, so anything that needs the decoded pixels — not just the request —
+// waits for them here instead.
+function whenColliderReady(key, fn, tries) {
+  if (colliderRegions(key)) { fn(); return; }
+  if ((tries || 0) >= 40) return;
+  setTimeout(() => whenColliderReady(key, fn, (tries || 0) + 1), 50);
+}
+
+// Held right mouse button shows where this screen can be left from. The art
+// is the Figma reticle pair: a closed ring for anything straight ahead, a
+// half-ring with a tail for the sideways moves, turned so the ring always
+// faces the edge the move heads towards.
+const NAV_MARKER_ART = { front: 'target', grab: 'target', back: 'side', left: 'side', right: 'side', star: 'star' };
+const NAV_MARKER_SPIN = { right: ' scaleX(-1)', back: ' rotate(-90deg)' };
+// Hand-placed positions exported from the authoring tool (Shift+N); any
+// action missing here falls back to the centroid of its painted region.
+const NAV_MARKERS = {"tunnel2_1_1":{"1":[0.4873066271963328,0.36500861045789335],"2":[0.628967934411645,0.6583156086387429],"3":[0.4873066271963328,0.8603157722513088],"4":[0.3531005208530063,0.5],"5":[0.5,0.6126063481675391]},"hub":{"1":[0.14889322814184894,0.562413901823826],"2":[0.8108072806192117,0.562413901823826],"3":[0.49062499999999987,0.562413901823826],"4":[0.6607196154711912,0.562413901823826]},"first_portal":{"1":[0.10173128580631786,0.5422030065285024],"2":[0.5,0.5422030065285024],"3":[0.9086146789606492,0.5422030065285024],"4":[0.5,0.9037987178348424]},"tunnel1_a_front":{"1":[0.3150946815665632,0.5552609442579104],"2":[0.733020040034052,0.4464332460732983],"3":[0.38780495287179156,0.8946567510779317]},"second_door":{"1":[0.48125,0.6071825916230369],"2":[0.07675727918480131,0.6071825916230369],"3":[0.9106723487989162,0.6071825916230369],"4":[0.48125,0.9093886343804534]},"tunnel1_b_front":{"1":[0.5890497377079358,0.5],"2":[0.5890497377079358,0.903382689790576],"3":[0.4375,0.425163612565445]},"beach_a_front":{"1":[0.5,0.5],"2":[0.5,0.9206928498533996],"3":[0.05925229026221537,0.5833333333333334],"4":[0.93125,0.5833333333333334]},"beach_b_front":{"1":[0.06875,0.5166666666666667],"2":[0.921875,0.5166666666666667],"3":[0.4771039207678563,0.3507771596858639],"4":[0.5,0.9125]},"storgage_view":{"1":[0.5,0.9041666666666667],"2":[0.9,0.40400305410122167],"3":[0.09360542704626335,0.3566358470365057]},"beach_b_right":{"1":[0.096875,0.5],"2":[0.8971510969100155,0.5],"3":[0.5,0.9083333333333333]},"beach_b_left":{"1":[0.1032967696661528,0.5],"2":[0.8826897902622154,0.5],"3":[0.5,0.5],"4":[0.5,0.8958333333333334]},"beach_b_back":{"1":[0.7781418725889453,0.6166666666666667],"2":[0.0875,0.6166666666666667],"3":[0.946875,0.6166666666666667],"4":[0.5,0.9041666666666667]},"ezh_inside":{"1":[0.490625,0.3625],"2":[0.5,0.9041666666666667],"3":[0.075,0.5083333333333333],"4":[0.921875,0.5083333333333333]},"ezh_inside2":{"1":[0.6105231269508927,0.5957890215968584],"2":[0.0625,0.5125],"3":[0.928125,0.5125],"4":[0.5,0.9041666666666667]},"ezh_mayak":{"1":[0.2966484902867572,0.5249604602966843],"2":[0.5,0.8778454952006981],"3":[0.5,0.5],"4":[0.5,0.5]},"ezh_sea":{"1":[0.5,0.8940813154450266]},"beach_a_back":{"1":[0.509375,0.5625],"2":[0.5,0.925],"3":[0.900006255320619,0.5625],"4":[0.08158424023498886,0.5625]},"tunnel1_b_back":{"1":[0.4977132642998027,0.5291666666666667],"2":[0.4977132642998027,0.9190335305719921],"3":[0.1,0.5291666666666667],"4":[0.9,0.5291666666666667]},"tunnel1_a_back":{"1":[0.509375,0.5208333333333334],"2":[0.509375,0.8892745146160558],"3":[0.07174462090360383,0.5208333333333334],"4":[0.921875,0.5208333333333334]},"tunnel2_2_1":{"1":[0.484375,0.5],"2":[0.5030715811965811,0.923148148148148],"3":[0.09074770973778462,0.5041666666666667],"4":[0.896875,0.5041666666666667]},"room2_1_1":{"1":[0.9629741193820708,0.6081760882560229],"3":[0.3612648268708981,0.6081760882560229],"4":[0.7159643893280255,0.6081760882560229],"5":[0.4794294752586363,0.16886603523690807],"7":[0.5,0.8890379581151838],"8":[0.05548823049550652,0.6081760882560229]},"cables_1":{"1":[0.3932523065596023,0.9155752345113438],"2":[0.3932523065596023,0.562367064790576],"3":[0.06404197208155961,0.562367064790576]},"cables_2a":{"1":[0.390625,0.5666666666666667],"2":[0.5,0.8988281250000001],"3":[0.07767210144927528,0.5666666666666667],"4":[0.91921857580825,0.5666666666666667]},"cables_3":{"1":[0.5,0.8997634434991273],"2":[0.0716162310470975,0.6569555791884817],"3":[0.9089317590057447,0.6569555791884817]},"cables_2b":{"1":[0.3105049122241908,0.5264350185427575],"2":[0.5,0.9125],"4":[0.8982545986622076,0.5264350185427575]},"room2_2_1":{"1":[0.5628872790839966,0.4166666666666667],"2":[0.5,0.9083333333333333],"4":[0.9246415293851474,0.4166666666666667]},"lift_1_1":{"1":[0.159375,0.425],"2":[0.6697636495409885,0.3902527814136127],"3":[0.5,0.925],"4":[0.903125,0.425]},"lift_2_1__red":{"1":[0.46697574181871176,0.8998772905759164],"3":[0.6131507370892738,0.5369833543692349]},"lift_panel":{"1":[0.4503014976293759,0.9145413987623299]},"lift_2_2":{"1":[0.3611002461864117,0.46500327225130894],"2":[0.5,0.8833333333333333],"3":[0.10625,0.4875],"4":[0.89375,0.4875]},"lift_1_2":{"1":[0.5125,0.4791666666666667],"2":[0.5,0.9041666666666667],"3":[0.096875,0.525],"4":[0.915625,0.525]},"room2_1_2":{"1":[0.5125,0.5916666666666667],"2":[0.04375,0.5916666666666667],"3":[0.946875,0.5916666666666667]},"tunnel2_2_2":{"1":[0.459375,0.45416666666666666],"2":[0.459375,0.8840477748691101],"3":[0.09973157244859612,0.49583333333333335],"4":[0.859375,0.49583333333333335]},"tunnel2_1_2":{"1":[0.471875,0.4708333333333333],"2":[0.471875,0.8536192462914487],"3":[0.09987729026221538,0.5708333333333333],"4":[0.8811272902622154,0.5708333333333333]},"lever_view":{"1":[0.11211677814938677,0.5666666666666667],"2":[0.902189590301003,0.5666666666666667],"4":[0.7955356834929972,0.8934938376052091]},"lift_2_1__green":{"1":[0.49404778203723987,0.9042898868200073],"2":[0.43567080477832515,0.4012837846615556],"3":[0.615625,0.5708333333333333],"4":[0.103125,0.4875],"5":[0.890625,0.4875]},"lift_3_1":{},"greenhouse_1_1":{"1":[0.5,0.453768365677671],"2":[0.5,0.9272714604236345]},"greenhouse_2_1":{"1":[0.5,0.5333333333333333],"2":[0.5,0.9125],"3":[0.05625,0.5333333333333333],"4":[0.94375,0.5333333333333333]},"greenhouse_3_1":{"1":[0.446875,0.9041666666666667],"2":[0.21591192987905428,0.5],"3":[0.8646323213614645,0.6228914430628273]},"greenhouse_4_1":{"1":[0.5,0.9041666666666667]},"greenhouse_3_4":{"1":[0.5,0.9083333333333333]},"greenhouse_3_2":{"1":[0.471875,0.5958333333333333],"2":[0.5,0.8875]},"greenhouse_2_2":{"1":[0.45625,0.42083333333333334],"2":[0.5,0.9083333333333333]},"room2_1_3":{"1":[0.47195124064495997,0.841924373715952]},"third_gate__closed":{"1":[0.5,0.9122561315496103],"4":[0.8999587200180914,0.7109738932982068],"5":[0.18351028128219227,0.6894680916104429]},"third_gate__open":{"1":[0.5,0.89950779886562],"2":[0.5,0.5],"4":[0.9018299235371866,0.5],"5":[0.5,0.5]},"tunnel3_1_1":{"1":[0.1811349596208269,0.4],"2":[0.6533618337696788,0.4267472458551481],"3":[0.45959464856230026,0.9132321618743344]},"tunnel3_2_1":{"1":[0.47355207302763264,0.5],"2":[0.47355207302763264,0.8792764234293196],"3":[0.1,0.525],"4":[0.8626227097377847,0.525]},"tower_1_1":{"1":[0.08719638926596562,0.5239151444281902],"2":[0.9125,0.5239151444281902],"3":[0.3037812655360904,0.5239151444281902],"4":[0.5,0.9170293411867363]},"tower_1_2":{"1":[0.5,0.5],"2":[0.5,0.8958333333333334],"3":[0.07899731764182559,0.5],"4":[0.9327705222449754,0.5]},"tower_2_1":{"1":[0.5,0.4110940764289629],"2":[0.5,0.9291666666666667]},"tower_3_1":{"1":[0.5519378312204253,0.587856539048866],"2":[0.5,0.9],"3":[0.040740040379173094,0.45416666666666666],"4":[0.953125,0.45416666666666666]},"tower_4_1":{"1":[0.5,0.9230205225231752]},"tower_2_2":{"1":[0.5574818427934873,0.3660081260907505],"2":[0.5,0.8794202661431068],"3":[0.07336496464425679,0.4570782886125656]},"tower_1_4":{"1":[0.496875,0.5791666666666667],"2":[0.503125,0.925],"3":[0.95625,0.5916666666666667],"4":[0.046875,0.5916666666666667]},"towerlift_1_1":{"1":[0.5,0.6200834424083772],"2":[0.4875,0.9208333333333333],"3":[0.034375,0.5916666666666667],"4":[0.953125,0.6]},"towerlift_2_1":{"1":[0.90625,0.5]},"towerlift_1_2":{"1":[0.503125,0.5625],"2":[0.0789400610864413,0.5625],"3":[0.920028146546105,0.5625],"4":[0.5,0.9166666666666666]},"tunnel3_2_2":{"1":[0.5,0.4628292702879581],"2":[0.5,0.8825486747382199],"3":[0.040740040379173094,0.5416666666666666],"4":[0.959375,0.5416666666666666]},"tunnel3_1_2":{"1":[0.68125,0.5375],"2":[0.68125,0.9069102857766144],"3":[0.040625,0.5]},"lever_view__locked":{"1":[0.11211677814938677,0.5666666666666667],"2":[0.902189590301003,0.5666666666666667],"4":[0.5359431202018577,0.9186388797993021]},"lever_view__ready":{"1":[0.11211677814938677,0.5666666666666667],"2":[0.902189590301003,0.5666666666666667],"4":[0.5359431202018577,0.9186388797993021]},"towerlift_2_1__locked":{"1":[0.90625,0.5]},"towerlift_2_1__ready":{"1":[0.90625,0.5]},"final_1":{"1":[0.5,0.4396715904868081]},"final_2":{"1":[0.5,0.5]},"final_3":{"1":[0.5,0.5]},"final_4":{"1":[0.5,0.5]},"final_5":{"1":[0.5,0.5]},"final_6":{"1":[0.5,0.5]},"final_7":{"1":[0.5,0.5]},"final_8":{"1":[0.5,0.5]},"final_9":{"1":[0.5,0.5]},"final_10":{"1":[0.5,0.5]},"final_11":{"1":[0.5,0.5]},"final_12":{"1":[0.5,0.5]}};
+const NAV_MARKER_HIDES = {"first_portal":{"1":false},"tunnel1_a_front":{"1":true},"tunnel1_b_front":{"3":true},"beach_a_front":{"3":true,"4":true},"storgage_view":{"2":true,"3":true},"tunnel1_b_back":{"3":true,"4":true},"tunnel1_a_back":{"3":true,"4":true},"tunnel2_1_1":{"2":true,"4":true,"5":true},"tunnel2_2_1":{"3":true,"4":true},"lift_1_1":{"1":true,"4":true},"lift_2_2":{"3":true,"4":true},"lift_1_2":{"3":true,"4":true},"tunnel2_2_2":{"3":true,"4":true},"tunnel2_1_2":{"3":true,"4":true},"lift_2_1__green":{"4":true,"5":true},"tunnel3_1_1":{"1":true},"tunnel3_2_1":{"3":true,"4":true},"tower_3_1":{"3":true},"tower_2_2":{"3":true},"tower_1_2":{"4":true},"tunnel3_2_2":{"3":true,"4":true},"tunnel3_1_2":{"3":true},"final_1":{"1":true},"final_2":{"1":true},"final_3":{"1":true},"final_4":{"1":true},"final_5":{"1":true},"final_6":{"1":true},"final_7":{"1":true},"final_8":{"1":true},"final_9":{"1":true},"final_10":{"1":true},"final_11":{"1":true},"final_12":{"1":true},"third_gate__closed":{"5":true},"third_gate__open":{"5":true}};
+const NAV_FREE_MARKERS = {"hub":{},"lever_view":{"f1":{"pos":[0.5359375000000001,0.5744791666666668],"cursor":"front"}},"second_door":{},"third_gate__closed":{"f1":{"pos":[0.22108939520624293,0.3638138215165057],"cursor":"front"},"f2":{"pos":[0.5,0.5640065937201476],"cursor":"star"},"f3":{"pos":[0.0836091736872557,0.7109738932982068],"cursor":"left"}},"room2_1_1":{"f1":{"pos":[0.8031110646599778,0.22939892233370499],"cursor":"front"}},"room2_2_1":{},"lift_1_1":{},"lift_2_1__red":{"f1":{"pos":[0.28771501160689456,0.5369833543692349],"cursor":"star"}},"cables_1":{},"cables_2a":{},"cables_3":{},"cables_2b":{},"greenhouse_1_1":{},"greenhouse_2_1":{},"greenhouse_3_1":{},"third_gate__open":{"f1":{"pos":[0.3189080294018039,0.89950779886562],"cursor":"front"},"f2":{"pos":[0.06758306962025332,0.5],"cursor":"left"}},"towerlift_2_1":{"f1":{"pos":[0.4904804208472687,0.4162950575994054],"cursor":"star"}},"lever_view__locked":{"f1":{"pos":[0.5359431202018577,0.5666666666666667],"cursor":"star"}},"lever_view__ready":{"f1":{"pos":[0.5359431202018577,0.3514504219409284],"cursor":"front"}},"towerlift_2_1__locked":{"f1":{"pos":[0.4904804208472687,0.4162950575994054],"cursor":"star"}},"towerlift_2_1__ready":{"f1":{"pos":[0.4904804208472687,0.4162950575994054],"cursor":"front"}},"tunnel3_1_1":{},"tunnel3_2_1":{},"tower_1_1":{},"tower_1_4":{},"towerlift_1_1":{},"tower_4_1":{},"final_1":{},"final_2":{},"final_3":{},"final_4":{},"final_5":{},"final_6":{},"final_7":{},"final_8":{},"final_9":{},"final_10":{},"final_11":{},"final_12":{},"first_portal":{}};
+const NAV_MARKER_VARIANTS = {
+  lever_view__locked: { node: 'lever_view', ready: false, label: 'lever closed — заблокирован' },
+  lever_view__ready: { node: 'lever_view', ready: true, label: 'lever closed — доступен' },
+  towerlift_2_1__locked: { node: 'towerlift_2_1', ready: false, label: 'tower lift 2 1 — заблокирован' },
+  towerlift_2_1__ready: { node: 'towerlift_2_1', ready: true, label: 'tower lift 2 1 — доступен' },
+};
+function navMarkerBaseKey(key) {
+  return (NAV_MARKER_VARIANTS[key] || {}).node || key;
+}
+function navMarkerKeyFor(id) {
+  if (id === 'lever_view' && !state.leverOpen)
+    return state.cablesSolved ? 'lever_view__ready' : 'lever_view__locked';
+  if (id === 'towerlift_2_1')
+    return state.towerSolved ? 'towerlift_2_1__ready' : 'towerlift_2_1__locked';
+  return colliderKeyFor(id);
+}
+
+let navMarkersHeld = false;
+
+function navMarkerPositions(key, includeFree = true) {
+  const baseKey = navMarkerBaseKey(key);
+  const cfg = COLLIDER_DATA[baseKey];
+  const regions = colliderRegions(baseKey) || {};
+  const placed = NAV_MARKERS[key] || NAV_MARKERS[baseKey] || {};
+  const hidden = NAV_MARKER_HIDES[key] || NAV_MARKER_HIDES[baseKey] || {};
+  const out = [];
+  (cfg ? cfg.actions : []).forEach((a, i) => {
+    if (!a || !a.to || hidden[i]) return;
+    const p = placed[i] || (regions[i] && regions[i].centroid);
+    if (p) out.push({ i, action: a, pos: p });
+  });
+  if (includeFree) Object.entries(NAV_FREE_MARKERS[key] || NAV_FREE_MARKERS[baseKey] || {}).forEach(([id, m]) => {
+    out.push({ i: id, action: { cursor: m.cursor }, pos: m.pos });
+  });
+  return out;
+}
+
+function renderNavMarkers() {
+  const layer = document.getElementById('nav-markers');
+  if (!layer) return;
+  layer.innerHTML = '';
+  navMarkerPositions(navMarkerKeyFor(state.current)).forEach(m => {
+    const img = document.createElement('img');
+    img.className = 'nav-marker';
+    img.dataset.direction = m.action.cursor || 'front';
+    img.src = 'assets/nav/' + (NAV_MARKER_ART[m.action.cursor] || 'target') + '.png?v=1';
+    img.style.left = (m.pos[0] * 100) + '%';
+    img.style.top = (m.pos[1] * 100) + '%';
+    img.style.transform = 'translate(-50%, -50%)' + (NAV_MARKER_SPIN[m.action.cursor] || '');
+    layer.appendChild(img);
+  });
+}
+
+function showNavMarkers() {
+  if (navMarkersHeld || !gameStarted || autoAdvancing || minimapOpen) return;
+  if (!titleScreen.classList.contains('hidden')) return;
+  if (typeof editorMode !== 'undefined' && editorMode) return;
+  navMarkersHeld = true;
+  renderNavMarkers();
+  // on the first press of a screen its map may still be decoding
+  whenColliderReady(colliderKeyFor(state.current),
+                    () => { if (navMarkersHeld) renderNavMarkers(); });
+  document.getElementById('nav-markers').classList.add('show');
+  if (tutorialStep === 'directions') {
+    clearTimeout(tutorialHoldTimer);
+    tutorialHoldTimer = setTimeout(() => {
+      if (navMarkersHeld && tutorialStep === 'directions') { tutorialStep = 'done'; refreshTutorial(); }
+    }, 300);
+  }
+}
+
+function hideNavMarkers() {
+  clearTimeout(tutorialHoldTimer); tutorialHoldTimer = null;
+  if (!navMarkersHeld) return;
+  navMarkersHeld = false;
+  const layer = document.getElementById('nav-markers');
+  if (layer) layer.classList.remove('show');
 }
 
 // Shared by click and hover — returns the action at a client-space point, or
@@ -722,6 +899,7 @@ function towerliftInteract(action) {
 // front/back/left/right/grab vocabulary as hotspot icons (↑/↻/←/→/✋) — the
 // hotspot value points at the drawn fingertip, not the image's top-left.
 const CURSOR_CSS = {
+  passive: `url("assets/cursors/passive-arrow.png") 0 0, default`,
   front: `url("assets/cursors/front.png") 11 0, pointer`,
   back:  `url("assets/cursors/back.png") 9 0, pointer`,
   left:  `url("assets/cursors/left.png") 0 11, pointer`,
@@ -732,11 +910,10 @@ const ICON_CURSOR = { '↑': 'front', '↻': 'back', '←': 'left', '→': 'righ
 
 function updateColliderCursor(clientX, clientY) {
   const action = resolveColliderAction(clientX, clientY);
-  // unclassified/no-op ground (or a node with no collider map at all, e.g.
-  // lift_3_1 mid-auto-advance) still shows the front cursor rather than
-  // reverting to the plain OS pointer — every pixel over the scene reads
-  // as "clickable" even where nothing's actually wired up yet.
-  colliderLayer.style.cursor = CURSOR_CSS[(action && action.cursor) || 'front'];
+  // Empty pixels use the arrow, with its tip at the pointer position.
+  // Painted regions retain their action cursor.
+  const cursor = action ? (action.cursor || 'front') : 'passive';
+  colliderLayer.style.cursor = CURSOR_CSS[cursor] || CURSOR_CSS.front;
 }
 
 function mkFinal(n) {
@@ -744,6 +921,7 @@ function mkFinal(n) {
     title: 'Финал',
     image: () => img(`4 final/${n}.jpg`),
     hotspots: [],
+    noMinimap: true,
     noVignette: true
   };
 }
@@ -1166,6 +1344,7 @@ const nodes = {
     title: 'Финал',
     image: () => img('4 final/12.jpg'),
     hotspots: [],
+    noMinimap: true,
     noVignette: true
   },
   // pure black — the actual end of the game, reached only by clicking
@@ -1175,6 +1354,7 @@ const nodes = {
     title: 'Финал',
     image: () => img('4 final/13.jpg'),
     hotspots: [],
+    noMinimap: true,
     noVignette: true,
     chapterEnd: true,
     // opens the menu (continue hidden) with the ending theme hard-restarted
@@ -1186,6 +1366,7 @@ const nodes = {
 let blinkTimer = null;
 let rhythmTimers = [];
 let imgA, imgB, activeImg;
+let sceneReady = Promise.resolve(true);
 let hotspotLayer, tabloLayer, colliderLayer, fadeOverlay, sceneWrap, vignetteEl;
 let titleScreen, creditsScreen, newGameBtn, continueBtn, continueImg, creditsBtn, creditsBackBtn, storeBtn;
 
@@ -1202,6 +1383,47 @@ const CREDITS_LINKS = [
 // "continue" menu item and whether Esc is allowed to pause into the menu
 // (nothing to pause into before a game exists)
 let gameStarted = false;
+
+// Tutorial progress belongs to this playthrough; pause/resume never resets it.
+const TUTORIAL_TEXT_IMAGES = {
+  map: { src: 'assets/tutorial/map-text.png?v=1', text: 'press M to open the map' },
+  directions: { src: 'assets/tutorial/directions-text.png?v=1', text: 'press rmb to show directions' },
+};
+const TUTORIAL_HINT_MS = 10000;
+let tutorialStep = 'map', tutorialHoldTimer = null;
+let tutorialExpiryTimers = {}, tutorialExpiredSteps = new Set();
+function refreshTutorial() {
+  const hint = document.getElementById('tutorial-hint');
+  if (!hint || !titleScreen || !creditsScreen) return;
+  const show = gameStarted && tutorialStep !== 'done' && !tutorialExpiredSteps.has(tutorialStep) && !minimapOpen && !autoAdvancing
+    && titleScreen.classList.contains('hidden') && creditsScreen.classList.contains('hidden')
+    && !(typeof editorMode !== 'undefined' && editorMode) && !nodes[state.current].chapterEnd && !nodes[state.current].noMinimap;
+  const tutorial = TUTORIAL_TEXT_IMAGES[tutorialStep];
+  if (tutorial) {
+    hint.dataset.step = tutorialStep;
+    const label = hint.querySelector('.tutorial-copy');
+    if (label.getAttribute('src') !== tutorial.src) label.src = tutorial.src;
+    if (label.alt !== tutorial.text) label.alt = tutorial.text;
+  }
+  hint.classList.toggle('show', show);
+  hint.setAttribute('aria-hidden', show ? 'false' : 'true');
+  if (show && !tutorialExpiryTimers[tutorialStep]) {
+    const step = tutorialStep;
+    tutorialExpiryTimers[step] = setTimeout(() => {
+      tutorialExpiredSteps.add(step);
+      delete tutorialExpiryTimers[step];
+      refreshTutorial();
+    }, TUTORIAL_HINT_MS);
+  }
+}
+function initTutorial() {
+  const stage = document.getElementById('stage');
+  const resize = () => stage.style.setProperty('--tutorial-unit', (stage.clientWidth / 640) + 'px');
+  resize(); new ResizeObserver(resize).observe(stage);
+  const observer = new MutationObserver(refreshTutorial);
+  for (const el of [titleScreen, creditsScreen, document.body]) observer.observe(el, { attributes: true, attributeFilter: ['class'] });
+  refreshTutorial();
+}
 
 const SRC_W = 640, SRC_H = 480;
 
@@ -1248,8 +1470,8 @@ let autoAdvancing = false;
 function stopAutoAdvance() {
   autoAdvanceTimers.forEach(clearTimeout);
   autoAdvanceTimers = [];
-  autoAdvancing = false;
-  fadeOverlay.classList.remove('show');
+  autoAdvancing = minimapTravelling;
+  if (!minimapTravelling) fadeOverlay.classList.remove('show');
 }
 
 // Holds the current frame, fades to black, jumps to `to`, then fades back in.
@@ -1287,7 +1509,7 @@ function startRhythm(node, targetImg) {
   const redSrc = hasFlash ? resolve(node.blinkImage) : null;
 
   function playNote(i) {
-    playOneShot(sounds[i], volume);
+    playOneShot(sounds[i], volume, true);
 
     if (hasFlash) {
       targetImg.src = redSrc;
@@ -1311,7 +1533,20 @@ function render() {
   stopTabloSequence();
   updateAmbience(state.current);
   updateMusic(state.current);
+  setRhythmVolume(minimapOpen || !titleScreen.classList.contains('hidden') ? 0 : 1);
   vignetteEl.style.display = node.noVignette ? 'none' : '';
+  document.dispatchEvent(new CustomEvent('untorra:screenchange', { detail: {
+    id: state.current, title: node.title, image: resolve(node.image), noVignette: !!node.noVignette
+  } }));
+
+  // Only the ten map pins update the minimap; every other screen leaves it
+  // showing whichever pin the player came through, which is what makes a
+  // corridor read as "still in the hub area".
+  if (MINIMAP_NODES[state.current]) {
+    state.mapNode = state.current;
+    if (!state.explored.includes(state.current)) state.explored.push(state.current);
+  }
+  if (minimapOpen) renderMinimap();
 
   // The crossfade swap has to survive two cases where `load` never fires:
   // (1) nextImg already holds this exact URL — assigning the same src is a
@@ -1325,14 +1560,27 @@ function render() {
   // which reads as "the click did nothing".
   const nextImg = activeImg === imgA ? imgB : imgA;
   let swapped = false;
+  let finishScene;
+  sceneReady = new Promise(resolve => { finishScene = resolve; });
   const swapToNext = () => {
     if (swapped) return;
     swapped = true;
+    if (minimapTravelling) {
+      imgA.style.transition = 'none';
+      imgB.style.transition = 'none';
+    }
     imgA.classList.toggle('active', nextImg === imgA);
     imgB.classList.toggle('active', nextImg === imgB);
     activeImg = nextImg;
+    if (minimapTravelling) {
+      void nextImg.offsetWidth;
+      imgA.style.transition = '';
+      imgB.style.transition = '';
+    }
+    finishScene(true);
   };
   nextImg.onload = swapToNext;
+  nextImg.onerror = () => { if (!swapped) { swapped = true; finishScene(false); } };
   nextImg.src = resolve(node.image);
   if (nextImg.complete && nextImg.naturalWidth > 0) swapToNext();
 
@@ -1394,6 +1642,7 @@ function render() {
   if (node.towerGlow) updateTowerGlow();
 
   if (node.openEndingMenu) openEndingMenu();
+  refreshTutorial();
 }
 
 function navigate(id) {
@@ -1404,10 +1653,807 @@ function navigate(id) {
   render();
 }
 
+// ---- Minimap (M) -----------------------------------------------------
+// Ten screens act as map pins; every other screen in the game belongs to
+// whichever pin the player passed through last, so walking a corridor
+// keeps the pin you came from lit. Positions are the mockup's own 640x480
+// coordinates — the designer's layout already matches the real node graph
+// (verified by BFS over COLLIDER_DATA), so there's nothing to solve at
+// runtime beyond framing whatever subset is currently visible.
+const MINIMAP_NODES = {
+  greenhouse_2_1: { x: 355, y: 79 },
+  lift_2_1:       { x: 355, y: 163 },
+  cables_2a:      { x: 445, y: 209 },
+  ezh_inside2:    { x: 256, y: 196 },
+  room2_1_1:      { x: 355, y: 257 },
+  beach_a_front:  { x: 257, y: 295 },
+  storgage_view:  { x: 155, y: 295 },
+  tower_1_1:      { x: 448, y: 307 },
+  towerlift_2_1:  { x: 551, y: 307 },
+  hub:            { x: 355, y: 351 },
+  tower_exit:     { x: 551, y: 387, hint: true }, // Figma 46:113: unknown continuation
+};
+const MINIMAP_EDGES = [
+  ['hub', 'beach_a_front'], ['hub', 'room2_1_1'], ['hub', 'tower_1_1'],
+  ['beach_a_front', 'ezh_inside2'], ['beach_a_front', 'storgage_view'],
+  ['room2_1_1', 'cables_2a'], ['room2_1_1', 'lift_2_1'],
+  ['lift_2_1', 'greenhouse_2_1'], ['tower_1_1', 'towerlift_2_1'],
+  ['towerlift_2_1', 'tower_exit'],
+];
+// Original connector artwork and transforms from Figma frame 46:2.
+// Tiles: x, y, size, rotation, opacity, optional local Y reflection.
+// These are visual link placements; node adjacency stays in MINIMAP_EDGES.
+const MINIMAP_LINK_ART = {
+  vertical: 'assets/minimap/link-vertical.png?v=1',
+  diagonal: 'assets/minimap/link-diagonal.png?v=1',
+};
+const MINIMAP_LINKS = [
+  { edge: ['hub', 'room2_1_1'], art: 'vertical', tiles: [
+    [330.38, 264.88, 50.183, 0, 0.52], [330.38, 315.32, 50.183, 180, 0.4],
+  ] },
+  { edge: ['room2_1_1', 'lift_2_1'], art: 'vertical', tiles: [
+    [330.38, 194.88, 50.183, 0, 0.52], [330.38, 142.88, 50.183, 0, 0.52],
+  ] },
+  { edge: ['lift_2_1', 'greenhouse_2_1'], art: 'vertical', tiles: [
+    [330.38, 92.88, 50.183, 0, 0.52],
+  ] },
+  { edge: ['beach_a_front', 'storgage_view'], art: 'vertical', tiles: [
+    [176.31, 270.42, 50.183, -90, 0.4],
+  ] },
+  { edge: ['beach_a_front', 'ezh_inside2'], art: 'vertical', tiles: [
+    [230.9, 212.31, 50.183, 0, 0.4],
+  ] },
+  { edge: ['tower_1_1', 'towerlift_2_1'], art: 'vertical', tiles: [
+    [462.31, 282.42, 50.183, -90, 0.4], [509.31, 282.42, 50.183, -90, 0.4],
+  ] },
+  { edge: ['towerlift_2_1', 'tower_exit'], art: 'vertical', tiles: [
+    [525.31, 321.42, 50.183, 0, 0.4],
+  ] },
+  // The Figma rotated wrappers are 60.985px square around 50.309px art.
+  { edge: ['hub', 'tower_1_1'], art: 'diagonal', tiles: [
+    [378.048, 308.778, 50.309, 14, 0.4],
+  ] },
+  { edge: ['room2_1_1', 'cables_2a'], art: 'diagonal', tiles: [
+    [378.048, 208.778, 50.309, 14, 0.4],
+  ] },
+  { edge: ['hub', 'beach_a_front'], art: 'diagonal', tiles: [
+    [281.138, 307.448, 50.309, 166, 0.4, -1],
+  ] },
+];
+
+const MINIMAP_LINK_BLUR = 1.5;
+
+function layoutMinimapLink(link) {
+  const [x, y, size, rotation, , flipY = 1] = link.tiles[0];
+  const angle = rotation * Math.PI / 180;
+  const localX = link.art === 'diagonal' ? Math.SQRT1_2 : 0;
+  const localY = link.art === 'diagonal' ? -Math.SQRT1_2 * flipY : flipY;
+  const axisX = localX * Math.cos(angle) - localY * Math.sin(angle);
+  const axisY = localX * Math.sin(angle) + localY * Math.cos(angle);
+  const centerX = x + size / 2, centerY = y + size / 2;
+  const pitch = size * (link.art === 'diagonal' ? Math.SQRT2 : 1);
+  const ends = link.edge.map(id => {
+    const node = MINIMAP_NODES[id];
+    return {
+      distance: (node.x - centerX) * axisX + (node.y - centerY) * axisY,
+      inset: minimapStateOf(id) === 'current' ? 24 : 12,
+    };
+  }).sort((first, second) => first.distance - second.distance);
+  const start = ends[0].distance + ends[0].inset;
+  const end = ends[1].distance - ends[1].inset;
+  const point = (distance, offset) => [
+    centerX + axisX * distance - axisY * offset,
+    centerY + axisY * distance + axisX * offset,
+  ];
+  const clip = [point(start, -size / 2), point(end, -size / 2),
+                point(end, size / 2), point(start, size / 2)];
+  const tiles = [];
+  const first = Math.floor((start + pitch / 2) / pitch);
+  const last = Math.ceil((end - pitch / 2) / pitch);
+  for (let index = first; index <= last; index++) {
+    const opacity = link.tiles[Math.max(0, Math.min(link.tiles.length - 1, index))][4];
+    tiles.push([x + axisX * pitch * index, y + axisY * pitch * index,
+                size, rotation, opacity, flipY]);
+  }
+  return { tiles, clip };
+}
+
+const MINIMAP_NEIGHBOURS = (() => {
+  const n = {};
+  MINIMAP_EDGES.forEach(([a, b]) => { (n[a] = n[a] || []).push(b); (n[b] = n[b] || []).push(a); });
+  return n;
+})();
+// The still is masked to the ring's own irregular inner shape (masks are
+// generated from the ring art, flood-filled from the centre and dilated a
+// few px so the seam tucks under the glow) rather than cropped to a
+// rounded square, which never sat straight inside the hand-drawn ring.
+// Widths are 1.45x the real hole so the still COVERS it on both axes —
+// renders are 4:3, so sizing by width alone left the shorter vertical
+// side falling short of a square hole, and the uncovered strip read as a
+// rectangle poking out (worst on the small `left` holes, which is why it
+// only showed once a second pin appeared).
+const MINIMAP_THUMB = { current: 0.737, left: 0.393 };
+const MINIMAP_LABEL_SCALE = 0.1875;   // 64px render -> Figma's 12px
+// Visible rim bottoms in the 118px ring art (alpha >= 32), relative to
+// its centre. Use the SAME 5px gap for both frame sizes.
+const MINIMAP_RING_FOOT = { current: 39, left: 23 };
+const MINIMAP_LABEL_GAP = 5;
+const MINIMAP_LABEL_DROP = {
+  current: MINIMAP_RING_FOOT.current + MINIMAP_LABEL_GAP,
+  left: MINIMAP_RING_FOOT.left + MINIMAP_LABEL_GAP,
+};
+const MINIMAP_NODE_BOX = 118;         // design px, matches the exported ring art
+const MINIMAP_LABEL_ROOM = 40;        // design px of label below the lowest pin
+const MINIMAP_TOP_INSET = 0.14;       // keeps pins clear of the "map" caption
+const MINIMAP_MAX_FREE = 0.4;         // most empty space zooming out may leave
+const MINIMAP_SAFE = 0.1;             // screen margin the map is never allowed into
+const MINIMAP_ZOOM_MAX = 4;           // absolute ceiling, for when a single pin is known
+// Cells across the stage in the low-res buffer. Matches the menu type's own
+// mosaic: assets/menu-text/map.png is 56px wide and #minimap-title shows it
+// across 10% of the stage, so both end up with one cell per 640/560 design px.
+const MINIMAP_RASTER_W = 560;
+// The stills are the only photographic thing on the map, so they get a touch
+// of blur on top of the shared low-res pass — enough to sit at the same
+// quality as the rest of the UI without a coarser grid of their own.
+const MINIMAP_THUMB_BLUR = 0.6;  // buffer px
+let minimapOpen = false;
+let minimapTravelling = false;
+let minimapView = { scale: 1, x: 0, y: 0 };
+
+// The box the map lives in: the whole stage less a safe margin all round,
+// with the top edge pushed further down to clear the "map" caption. Zoom
+// and panning are both held inside it, so no part of the map can ever sit
+// off-screen or flush against an edge.
+function minimapFrame() {
+  const stage = document.getElementById('stage').getBoundingClientRect();
+  if (!stage.width) return null;
+  const left = stage.width * MINIMAP_SAFE;
+  const top = Math.max(stage.height * MINIMAP_TOP_INSET, stage.height * MINIMAP_SAFE);
+  return { stage, left, top,
+           w: stage.width * (1 - MINIMAP_SAFE) - left,
+           h: stage.height * (1 - MINIMAP_SAFE) - top };
+}
+
+function minimapStateOf(id) {
+  if (MINIMAP_NODES[id]?.hint) return 'unexplored';
+  if (id === state.mapNode) return 'current';
+  if (state.explored.includes(id)) return 'left';
+  return 'unexplored';
+}
+
+// explored pins plus their not-yet-visited neighbours — the "?" circles
+function minimapVisible() {
+  const vis = new Set(state.explored);
+  state.explored.forEach(id => (MINIMAP_NEIGHBOURS[id] || []).forEach(nb => vis.add(nb)));
+  return [...vis].filter(id => MINIMAP_NODES[id]);
+}
+
+// Zooming out stops once the map would leave more than MINIMAP_MAX_FREE of
+// the usable height empty, so it can never shrink to a speck in the middle.
+function minimapZoomMin() {
+  const box = minimapContentBox();
+  const stage = document.getElementById('stage').getBoundingClientRect();
+  if (!box || !stage.width) return 0.5;
+  const px = stage.width / 640;
+  const frameH = stage.height * (1 - MINIMAP_TOP_INSET);
+  return (1 - MINIMAP_MAX_FREE) * frameH / ((box.maxY - box.minY) * px);
+}
+
+// Zooming in stops where the whole map still fits inside the safe frame —
+// there is no view that cuts a pin off the screen. Early on, when only a
+// few pins are known, that ceiling is high and the map opens close in.
+function minimapZoomMax() {
+  const box = minimapContentBox();
+  const f = minimapFrame();
+  if (!box || !f) return MINIMAP_ZOOM_MAX;
+  const px = f.stage.width / 640;
+  const bw = (box.maxX - box.minX) * px, bh = (box.maxY - box.minY) * px;
+  if (!bw || !bh) return MINIMAP_ZOOM_MAX;
+  return Math.max(minimapZoomMin(),
+                  Math.min(MINIMAP_ZOOM_MAX, Math.min(f.w / bw, f.h / bh)));
+}
+
+function minimapBackdropRect() {
+  const box = minimapContentBox();
+  const frame = minimapFrame();
+  if (!box || !frame) return null;
+  const zMin = minimapZoomMin();
+  const unit = frame.stage.width / 640 * zMin;
+  return {
+    left: (box.minX + box.maxX) / 2 - (frame.left + frame.w / 2) / unit,
+    top: (box.minY + box.maxY) / 2 - (frame.top + frame.h / 2) / unit,
+    width: 640 / zMin,
+    height: 480 / zMin,
+  };
+}
+
+function layoutMinimapBackdrop() {
+  const rect = minimapBackdropRect();
+  if (!rect) return;
+  const bg = document.getElementById('minimap-bg');
+  bg.style.left = (rect.left / 640 * 100) + '%';
+  bg.style.top = (rect.top / 480 * 100) + '%';
+  bg.style.width = (rect.width / 640 * 100) + '%';
+  bg.style.height = (rect.height / 480 * 100) + '%';
+}
+
+function applyMinimapView() {
+  minimapView.scale = Math.max(minimapZoomMin(), Math.min(minimapZoomMax(), minimapView.scale));
+  clampMinimapView();
+  const v = document.getElementById('minimap-view');
+  v.style.transform = 'translate(' + minimapView.x + 'px,' + minimapView.y + 'px) scale(' + minimapView.scale + ')';
+  scheduleMinimapPaint();
+}
+
+// Design-space box the visible pins occupy. Once the pins and their labels
+// are actually in the DOM this switches to their measured extent — the
+// guessed label room is only a starting estimate, and reserving a fixed
+// strip for labels that are mostly one short line left the map sitting low
+// with lopsided margins.
+let minimapMeasuredBox = null;
+function minimapContentBox() {
+  if (minimapMeasuredBox) return minimapMeasuredBox;
+  const visible = minimapVisible();
+  if (!visible.length) return null;
+  const half = MINIMAP_NODE_BOX / 2;
+  const xs = visible.map(id => MINIMAP_NODES[id].x);
+  const ys = visible.map(id => MINIMAP_NODES[id].y);
+  return {
+    minX: Math.min(...xs) - half, maxX: Math.max(...xs) + half,
+    minY: Math.min(...ys) - half, maxY: Math.max(...ys) + half + MINIMAP_LABEL_ROOM,
+  };
+}
+
+function measureMinimapContent() {
+  const stage = document.getElementById('stage').getBoundingClientRect();
+  const parts = document.querySelectorAll('.minimap-node, .minimap-label');
+  if (!stage.width || !parts.length) return;
+  const px = stage.width / 640, s = minimapView.scale;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  parts.forEach(el => {
+    const r = el.getBoundingClientRect();
+    minX = Math.min(minX, (r.left   - stage.left - minimapView.x) / s / px);
+    maxX = Math.max(maxX, (r.right  - stage.left - minimapView.x) / s / px);
+    minY = Math.min(minY, (r.top    - stage.top  - minimapView.y) / s / px);
+    maxY = Math.max(maxY, (r.bottom - stage.top  - minimapView.y) / s / px);
+  });
+  if (isFinite(minX)) minimapMeasuredBox = { minX, minY, maxX, maxY };
+}
+
+// Labels size themselves as their images arrive, so re-frame once they have
+let minimapRefitQueued = false;
+function scheduleMinimapRefit() {
+  if (minimapRefitQueued || !minimapOpen) return;
+  minimapRefitQueued = true;
+  requestAnimationFrame(() => {
+    minimapRefitQueued = false;
+    if (!minimapOpen) return;
+    measureMinimapContent();
+    layoutMinimapBackdrop();
+    fitMinimapView();
+  });
+}
+
+// Keeps the map inside the frame: when it's smaller than the viewport it
+// can't be dragged off the edges, and when it's zoomed past the viewport it
+// can't be pulled away far enough to leave empty space. The top edge also
+// stops below the "map" caption so the pins never slide under it.
+function clampMinimapView() {
+  const box = minimapContentBox();
+  const f = minimapFrame();
+  if (!box || !f) return;
+  const unit = f.stage.width / 640 * minimapView.scale;   // design px -> screen px
+  const w = (box.maxX - box.minX) * unit;
+  const h = (box.maxY - box.minY) * unit;
+  const clamp = (v, a, b) => (a <= b ? Math.min(Math.max(v, a), b) : Math.min(Math.max(v, b), a));
+  const x = minimapView.x + box.minX * unit;
+  const y = minimapView.y + box.minY * unit;
+  const nx = clamp(x, w <= f.w ? f.left : f.left + f.w - w, w <= f.w ? f.left + f.w - w : f.left);
+  const ny = clamp(y, h <= f.h ? f.top : f.top + f.h - h, h <= f.h ? f.top + f.h - h : f.top);
+  minimapView.x += nx - x;
+  minimapView.y += ny - y;
+  const backdrop = minimapBackdropRect();
+  if (backdrop) {
+    minimapView.x = clamp(minimapView.x, f.stage.width - (backdrop.left + backdrop.width) * unit, -backdrop.left * unit);
+    minimapView.y = clamp(minimapView.y, f.stage.height - (backdrop.top + backdrop.height) * unit, -backdrop.top * unit);
+  }
+}
+
+// Frames the visible pins: early on only a handful are known, so this zooms
+// in — which is also what brings the backing texture close, since it rides
+// the same transform.
+function fitMinimapView() {
+  const box = minimapContentBox();
+  const f = minimapFrame();
+  if (!box || !f) return;
+  const px = f.stage.width / 640;
+  // open as close in as the safe frame allows, which is also the zoom ceiling
+  minimapView.scale = minimapZoomMax();
+  const unit = px * minimapView.scale;
+  minimapView.x = f.left + (f.w - (box.maxX - box.minX) * unit) / 2 - box.minX * unit;
+  minimapView.y = f.top + (f.h - (box.maxY - box.minY) * unit) / 2 - box.minY * unit;
+  applyMinimapView();
+}
+
+// --- low-res pass -----------------------------------------------------
+// The map is ordinary DOM (that's what positions the pins, sizes the labels
+// and takes the clicks), but it's painted into a small canvas and scaled
+// back up unsmoothed, so it reads at the same resolution as the menu type.
+// Geometry is read straight off the live boxes — nothing about the layout
+// is duplicated here, so the raster can't drift from the DOM behind it.
+const minimapImgCache = {};
+function minimapImage(src) {
+  let im = minimapImgCache[src];
+  if (!im) {
+    im = minimapImgCache[src] = new Image();
+    im.onload = scheduleMinimapPaint;
+    im.src = src;
+  }
+  return im.complete && im.naturalWidth ? im : null;
+}
+
+let minimapScratchCv = null;
+function minimapScratch(w, h) {
+  if (!minimapScratchCv) minimapScratchCv = document.createElement('canvas');
+  if (minimapScratchCv.width !== w || minimapScratchCv.height !== h) {
+    minimapScratchCv.width = w;
+    minimapScratchCv.height = h;
+  }
+  return minimapScratchCv;
+}
+
+let minimapPaintQueued = false;
+function scheduleMinimapPaint() {
+  if (minimapPaintQueued || !minimapOpen) return;
+  minimapPaintQueued = true;
+  requestAnimationFrame(() => {
+    minimapPaintQueued = false;
+    if (minimapOpen) paintMinimapRaster();
+  });
+}
+
+// Fixed Photoshop reference palette, with a stable 4x4 ordered pattern.
+// Dither at display resolution AFTER the shared 560px pixel-mosaic pass:
+// otherwise each dot would grow into a large square along with the map.
+const MINIMAP_DITHER_PATTERN = new Uint8Array([
+  15, 7, 13, 5, 3, 11, 1, 9, 12, 4, 14, 6, 0, 8, 2, 10,
+]);
+let minimapDither = null, minimapDitherLoading = null;
+let minimapLowresCanvas = null, minimapDitherFrame = null;
+let minimapDitherPlans = [];
+
+function loadMinimapDither() {
+  if (minimapDither) return Promise.resolve(minimapDither);
+  if (minimapDitherLoading) return minimapDitherLoading;
+  minimapDitherLoading = fetch('assets/minimap/mac-dither.bin?v=1')
+    .then(response => {
+      if (!response.ok) throw new Error('Dither palette: HTTP ' + response.status);
+      return response.arrayBuffer();
+    }).then(buffer => {
+      const head = new Uint32Array(buffer, 0, 4);
+      if (head[0] !== 0x48544944 || head[1] !== 1 || head[3] !== 32)
+        throw new Error('Invalid minimap dither data');
+      const n = head[2], vertexOffset = 16 + 1024;
+      const matrixOffset = vertexOffset + n * 4;
+      const seedOffset = matrixOffset + n * 64;
+      if (buffer.byteLength !== seedOffset + 32768 * 2)
+        throw new Error('Incomplete minimap dither data');
+      minimapDither = {
+        palette: new Uint32Array(buffer, 16, 256),
+        rgb: new Uint8Array(buffer, 16, 1024),
+        vertices: new Uint8Array(buffer, vertexOffset, n * 4),
+        weights: new Float32Array(buffer, matrixOffset, n * 16),
+        seeds: new Uint16Array(buffer, seedOffset, 32768),
+        cache: new Map(),
+      };
+      resetMinimapDitherCache();
+      scheduleMinimapPaint();
+      return minimapDither;
+    }).catch(error => {
+      // Keep the map usable and retry on the next open/interaction.
+      minimapDitherLoading = null;
+      console.warn(error.message);
+      return null;
+    });
+  return minimapDitherLoading;
+}
+
+function resetMinimapDitherCache() {
+  const d = minimapDither;
+  d.cache.clear();
+  for (let i = 0; i < 256; i++) {
+    const o = i * 4, rgb = (d.rgb[o] << 16) | (d.rgb[o + 1] << 8) | d.rgb[o + 2];
+    d.cache.set(rgb, new Uint8Array(16).fill(i)); // retain exact palette colors
+  }
+}
+
+function minimapDitherPlan(r, g, b) {
+  const d = minimapDither, key = (r << 16) | (g << 8) | b;
+  const cached = d.cache.get(key);
+  if (cached) return cached;
+  const cell = d.seeds[((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3)];
+  const w = d.weights, base = cell * 16;
+  const a = Math.max(0, w[base] * r + w[base + 1] * g + w[base + 2] * b + w[base + 3]);
+  const c = Math.max(0, w[base + 4] * r + w[base + 5] * g + w[base + 6] * b + w[base + 7]);
+  const e = Math.max(0, w[base + 8] * r + w[base + 9] * g + w[base + 10] * b + w[base + 11]);
+  const f = Math.max(0, w[base + 12] * r + w[base + 13] * g + w[base + 14] * b + w[base + 15]);
+  const scale = 16 / (a + c + e + f || 1);
+  const n0 = Math.min(16, Math.floor(a * scale + 1e-6));
+  const n1 = Math.min(16 - n0, Math.floor(c * scale + 1e-6));
+  const n2 = Math.min(16 - n0 - n1, Math.floor(e * scale + 1e-6));
+  const plan = new Uint8Array(16), v = cell * 4;
+  plan.fill(d.vertices[v], 0, n0);
+  plan.fill(d.vertices[v + 1], n0, n0 + n1);
+  plan.fill(d.vertices[v + 2], n0 + n1, n0 + n1 + n2);
+  plan.fill(d.vertices[v + 3], n0 + n1 + n2);
+  d.cache.set(key, plan);
+  return plan;
+}
+
+function presentMinimapRaster(source, target, width, height) {
+  const w = Math.max(1, Math.round(width)), h = Math.max(1, Math.round(height));
+  if (target.width !== w || target.height !== h) { target.width = w; target.height = h; }
+  const out = target.getContext('2d', { alpha: false });
+  out.imageSmoothingEnabled = false;
+  if (!minimapDither) {
+    out.clearRect(0, 0, w, h);
+    out.drawImage(source, 0, 0, w, h);
+    loadMinimapDither();
+    return;
+  }
+  const sw = source.width, sh = source.height;
+  const rgba = source.getContext('2d').getImageData(0, 0, sw, sh).data;
+  if (minimapDither.cache.size > 32768) resetMinimapDitherCache();
+  // Resolve each low-res source pixel once; screen pixels then only pick
+  // one of its 16 ordered palette entries, with no per-frame random noise.
+  minimapDitherPlans.length = sw * sh;
+  for (let i = 0, j = 0; i < rgba.length; i += 4, j++) {
+    const alpha = rgba[i + 3] / 255; // composite against the map's black backdrop
+    minimapDitherPlans[j] = minimapDitherPlan(
+      Math.round(rgba[i] * alpha), Math.round(rgba[i + 1] * alpha), Math.round(rgba[i + 2] * alpha));
+  }
+  if (!minimapDitherFrame || minimapDitherFrame.width !== w || minimapDitherFrame.height !== h)
+    minimapDitherFrame = out.createImageData(w, h);
+  const pixels = new Uint32Array(minimapDitherFrame.data.buffer);
+  const palette = minimapDither.palette;
+  for (let y = 0, p = 0; y < h; y++) {
+    const sy = Math.min(sh - 1, Math.floor(y * sh / h)) * sw;
+    const row = (y & 3) * 4;
+    for (let x = 0; x < w; x++, p++) {
+      const sx = Math.min(sw - 1, Math.floor(x * sw / w));
+      const plan = minimapDitherPlans[sy + sx];
+      pixels[p] = palette[plan[MINIMAP_DITHER_PATTERN[row + (x & 3)]]];
+    }
+  }
+  out.putImageData(minimapDitherFrame, 0, 0);
+}
+
+function paintMinimapRaster() {
+  const target = document.getElementById('minimap-raster');
+  const stage = document.getElementById('stage').getBoundingClientRect();
+  if (!target || !stage.width) return;
+  if (!minimapLowresCanvas) minimapLowresCanvas = document.createElement('canvas');
+  const cv = minimapLowresCanvas;
+  const cw = MINIMAP_RASTER_W;
+  const ch = Math.max(1, Math.round(cw * stage.height / stage.width));
+  if (cv.width !== cw || cv.height !== ch) { cv.width = cw; cv.height = ch; }
+  const k = cw / stage.width;                  // screen px -> buffer px
+  const ctx = cv.getContext('2d', { willReadFrequently: true });
+  ctx.clearRect(0, 0, cw, ch);
+  const box = el => {
+    const r = el.getBoundingClientRect();
+    return { x: (r.left - stage.left) * k, y: (r.top - stage.top) * k,
+             w: r.width * k, h: r.height * k };
+  };
+  const ready = im => im && im.complete && im.naturalWidth;
+
+  const bgEl = document.getElementById('minimap-bg');
+  const bgImg = document.getElementById('minimap-rust');
+  if (ready(bgImg)) {
+    const b = box(bgEl), rust = box(bgImg);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(b.x, b.y, b.w, b.h);
+    ctx.clip();
+    ctx.globalAlpha = parseFloat(getComputedStyle(bgEl).opacity);
+    ctx.drawImage(bgImg, rust.x, rust.y, rust.w, rust.h);
+    ctx.restore();
+  }
+
+  // Paint the same Figma image tiles and transforms as the SVG layout.
+  const svg = document.getElementById('minimap-edges');
+  const sr = svg.getBoundingClientRect();
+  const visible = new Set(minimapVisible());
+  if (sr.width) {
+    ctx.save();
+    ctx.translate((sr.left - stage.left) * k, (sr.top - stage.top) * k);
+    ctx.scale(sr.width / 640 * k, sr.height / 480 * k);
+    MINIMAP_LINKS.forEach(link => {
+      if (!link.edge.every(id => visible.has(id))) return;
+      const art = minimapImage(MINIMAP_LINK_ART[link.art]);
+      if (!art) return;
+      const layout = layoutMinimapLink(link);
+      ctx.save();
+      ctx.beginPath();
+      layout.clip.forEach(([x, y], index) => {
+        if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      ctx.closePath();
+      ctx.clip();
+      ctx.filter = 'blur(' + MINIMAP_LINK_BLUR * sr.width / 640 * k + 'px)';
+      layout.tiles.forEach(([x, y, size, rotation, opacity, flipY = 1]) => {
+        ctx.save();
+        ctx.globalAlpha = opacity;
+        ctx.translate(x + size / 2, y + size / 2);
+        ctx.rotate(rotation * Math.PI / 180);
+        ctx.scale(1, flipY);
+        ctx.drawImage(art, -size / 2, -size / 2, size, size);
+        ctx.restore();
+      });
+      ctx.restore();
+    });
+    ctx.restore();
+  }
+
+  document.querySelectorAll('.minimap-node').forEach(node => {
+    const hole = node.querySelector('.minimap-hole');
+    const thumb = hole && hole.querySelector('.minimap-thumb');
+    if (hole && ready(thumb)) {
+      const maskSrc = (hole.style.maskImage || hole.style.webkitMaskImage || '')
+        .replace(/^url\(["']?/, '').replace(/["']?\)$/, '');
+      const mask = minimapImage(maskSrc);
+      const hb = box(hole);
+      // Everything here is snapped to whole buffer pixels: landing the
+      // scratch on a fractional offset makes the final blit resample it,
+      // which quietly smooths the blocks back out again.
+      const hx = Math.round(hb.x), hy = Math.round(hb.y);
+      const sw = Math.max(1, Math.round(hb.w)), sh = Math.max(1, Math.round(hb.h));
+      if (mask) {
+        const sc = minimapScratch(sw, sh);
+        const sctx = sc.getContext('2d');
+        sctx.clearRect(0, 0, sw, sh);
+        const tb = box(thumb);
+        sctx.filter = 'blur(' + MINIMAP_THUMB_BLUR + 'px)';
+        sctx.drawImage(thumb, Math.round(tb.x) - hx, Math.round(tb.y) - hy,
+                       Math.max(1, Math.round(tb.w)), Math.max(1, Math.round(tb.h)));
+        sctx.filter = 'none';
+        sctx.globalCompositeOperation = 'destination-in';
+        sctx.drawImage(mask, 0, 0, sw, sh);
+        sctx.globalCompositeOperation = 'source-over';
+        ctx.drawImage(sc, hx, hy, sw, sh);
+      }
+    }
+    const ring = node.querySelector('.minimap-ring');
+    if (ready(ring)) {
+      const rb = box(ring);
+      ctx.drawImage(ring, rb.x, rb.y, rb.w, rb.h);
+    }
+  });
+
+  document.querySelectorAll('.minimap-label').forEach(label => {
+    if (!ready(label)) return;
+    const b = box(label);
+    ctx.drawImage(label, b.x, b.y, b.w, b.h);
+  });
+  presentMinimapRaster(cv, target, stage.width, stage.height);
+}
+
+function renderMinimap() {
+  const graph = document.getElementById('minimap-graph');
+  const svg = document.getElementById('minimap-edges');
+  graph.innerHTML = '';
+  svg.innerHTML = '<defs><filter id="minimap-link-blur" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="' + MINIMAP_LINK_BLUR + '"/></filter></defs>';
+  const visible = minimapVisible();
+  if (!visible.length) return;
+  const pos = id => MINIMAP_NODES[id];
+  const visSet = new Set(visible);
+  MINIMAP_LINKS.forEach((link, index) => {
+    if (!link.edge.every(id => visSet.has(id))) return;
+    const layout = layoutMinimapLink(link);
+    const clip = document.createElementNS('http://www.w3.org/2000/svg', 'clipPath');
+    clip.id = 'minimap-link-clip-' + index;
+    const polygon = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+    polygon.setAttribute('points', layout.clip.map(point => point.join(',')).join(' '));
+    clip.appendChild(polygon);
+    svg.querySelector('defs').appendChild(clip);
+    const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    group.setAttribute('clip-path', 'url(#' + clip.id + ')');
+    layout.tiles.forEach(([x, y, size, rotation, opacity, flipY = 1]) => {
+      const image = document.createElementNS('http://www.w3.org/2000/svg', 'image');
+      image.setAttribute('href', MINIMAP_LINK_ART[link.art]);
+      image.setAttribute('x', -size / 2); image.setAttribute('y', -size / 2);
+      image.setAttribute('width', size); image.setAttribute('height', size);
+      image.setAttribute('opacity', opacity);
+      image.setAttribute('filter', 'url(#minimap-link-blur)');
+      image.setAttribute('transform', `translate(${x + size / 2} ${y + size / 2}) rotate(${rotation}) scale(1 ${flipY})`);
+      image.dataset.edge = link.edge.join(' ');
+      group.appendChild(image);
+    });
+    svg.appendChild(group);
+  });
+
+  visible.forEach(id => {
+    const st = minimapStateOf(id);
+    const p = pos(id);
+
+    const node = document.createElement('div');
+    node.className = 'minimap-node' + (st === 'unexplored' ? '' : ' clickable');
+    node.dataset.mapId = id;
+    node.style.left = (p.x / 640 * 100) + '%';
+    node.style.top = (p.y / 480 * 100) + '%';
+
+    if (st !== 'unexplored') {
+      const hole = document.createElement('div');
+      hole.className = 'minimap-hole';
+      hole.style.webkitMaskImage = 'url(assets/minimap/mask-' + st + '.png?v=3)';
+      hole.style.maskImage = 'url(assets/minimap/mask-' + st + '.png?v=3)';
+      const thumb = document.createElement('img');
+      thumb.className = 'minimap-thumb';
+      thumb.src = resolve(nodes[id].image);   // follows red/green progress
+      thumb.onload = scheduleMinimapPaint;
+      thumb.style.width = (MINIMAP_THUMB[st] * 100) + '%';
+      hole.appendChild(thumb);
+      node.appendChild(hole);
+    }
+
+    const ring = document.createElement('img');
+    ring.className = 'minimap-ring';
+    ring.src = 'assets/minimap/ring-' + st + '.png?v=1';
+    ring.onload = scheduleMinimapPaint;
+    node.appendChild(ring);
+
+    if (st !== 'unexplored') {
+      const label = document.createElement('img');
+      label.className = 'minimap-label';
+      label.dataset.mapId = id;
+      const labelVersion = id === 'tower_1_1' ? 3 : 2;
+      label.src = 'assets/minimap/label-' + id + '-' + (st === 'current' ? 'active' : 'passive') + '.png?v=' + labelVersion;
+      label.style.left = (p.x / 640 * 100) + '%';
+      label.style.top = ((p.y + MINIMAP_LABEL_DROP[st]) / 480 * 100) + '%';
+      const sizeIt = () => {
+        label.style.width = (label.naturalWidth * MINIMAP_LABEL_SCALE / 640 * 100) + '%';
+        scheduleMinimapRefit();
+      };
+      label.onload = sizeIt;
+      if (label.complete && label.naturalWidth) sizeIt();
+      graph.appendChild(label);
+      node.addEventListener('click', () => minimapTravel(id));
+    }
+    graph.appendChild(node);
+  });
+  scheduleMinimapPaint();
+}
+
+let minimapOpenRevision = 0;
+async function openMinimap() {
+  if (minimapOpen || !gameStarted || autoAdvancing || nodes[state.current].noMinimap) return;
+  if (!titleScreen.classList.contains('hidden')) return;
+  if (!creditsScreen.classList.contains('hidden')) return;
+  const revision = ++minimapOpenRevision;
+  const map = document.getElementById('minimap');
+  map.style.visibility = 'hidden';
+  minimapOpen = true;
+  setRhythmVolume(0, MAP_AUDIO_FADE_MS);
+  updateAmbience(state.current, MAP_AUDIO_FADE_MS);
+  updateMusic(state.current, MAP_AUDIO_FADE_MS);
+  minimapMeasuredBox = null;
+  renderMinimap();
+  layoutMinimapBackdrop();
+  fitMinimapView();
+  refreshTutorial();
+  await Promise.all([...map.querySelectorAll('img')].map(image => image.decode().catch(() => {})));
+  if (!minimapOpen || revision !== minimapOpenRevision) return;
+  map.querySelectorAll('.minimap-label').forEach(label => {
+    if (label.naturalWidth) label.style.width = (label.naturalWidth * MINIMAP_LABEL_SCALE / 640 * 100) + '%';
+  });
+  measureMinimapContent();
+  layoutMinimapBackdrop();
+  fitMinimapView();
+  paintMinimapRaster();
+  map.style.visibility = '';
+  map.classList.remove('hidden');
+}
+
+function closeMinimap({ instant = false } = {}) {
+  if (minimapTravelling && !instant) return;
+  const wasOpen = minimapOpen;
+  minimapOpenRevision++;
+  if (minimapOpen && tutorialStep === 'map') tutorialStep = 'directions';
+  minimapOpen = false;
+  const map = document.getElementById('minimap');
+  map.style.visibility = '';
+  if (instant) map.style.transition = 'none';
+  map.classList.add('hidden');
+  if (instant) { void map.offsetWidth; map.style.transition = ''; }
+  if (wasOpen) {
+    setRhythmVolume(titleScreen.classList.contains('hidden') ? 1 : 0, MAP_AUDIO_FADE_MS);
+    updateAmbience(state.current, MAP_AUDIO_FADE_MS);
+    updateMusic(state.current, MAP_AUDIO_FADE_MS);
+  }
+  refreshTutorial();
+}
+
+// Fades to black *before* hiding the map, so the screen never flashes the
+// room being left behind — the map stays up until the overlay is opaque,
+// and by the time it lifts the new location is already rendered.
+function minimapTravel(id) {
+  if (minimapTravelling) return;
+  if (id === state.mapNode) { closeMinimap(); return; }
+  minimapTravelling = true;
+  autoAdvancing = true;
+  const previous = { current: state.current, prevNode: state.prevNode, mapNode: state.mapNode };
+  const FADE_MS = 800;
+  fadeOverlay.style.transitionDuration = FADE_MS + 'ms';
+  fadeOverlay.classList.add('show');
+  setTimeout(async () => {
+    fadeOverlay.style.transition = 'none';
+    void fadeOverlay.offsetWidth;
+    fadeOverlay.style.transition = '';
+    navigate(id);
+    const loaded = await sceneReady;
+    if (loaded) closeMinimap({ instant: true });
+    else {
+      state.history.pop();
+      Object.assign(state, previous);
+      render();
+      await sceneReady;
+    }
+    await new Promise(requestAnimationFrame);
+    minimapTravelling = false;
+    autoAdvancing = false;
+    fadeOverlay.classList.remove('show');
+    refreshTutorial();
+  }, FADE_MS);
+}
+
+// Wheel zooms about the cursor, left-drag pans. A drag past a few pixels
+// suppresses the click so panning across a pin doesn't fast-travel.
+function initMinimapControls() {
+  const el = document.getElementById('minimap');
+  document.getElementById('minimap-rust').addEventListener('load', scheduleMinimapPaint);
+  let dragging = false, moved = 0, lastX = 0, lastY = 0;
+
+  el.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const r = el.getBoundingClientRect();
+    const cx = e.clientX - r.left, cy = e.clientY - r.top;
+    const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+    const next = Math.max(minimapZoomMin(), Math.min(MINIMAP_ZOOM_MAX, minimapView.scale * factor));
+    const k = next / minimapView.scale;
+    minimapView.x = cx - (cx - minimapView.x) * k;
+    minimapView.y = cy - (cy - minimapView.y) * k;
+    minimapView.scale = next;
+    applyMinimapView();
+  }, { passive: false });
+
+  el.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    dragging = true; moved = 0; lastX = e.clientX; lastY = e.clientY;
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    const dx = e.clientX - lastX, dy = e.clientY - lastY;
+    lastX = e.clientX; lastY = e.clientY;
+    moved += Math.abs(dx) + Math.abs(dy);
+    minimapView.x += dx; minimapView.y += dy;
+    applyMinimapView();
+  });
+  window.addEventListener('mouseup', () => { dragging = false; });
+  // capture phase: runs before the per-node click handler
+  el.addEventListener('click', (e) => {
+    if (moved > 5) { e.stopPropagation(); moved = 0; }
+  }, true);
+}
+
 // "new game" from the Esc menu must actually start over, not just resume
 // where "continue" would — restores every mutable field back to its initial
 // value (mirrors the literal shape of the `state` object above).
 function resetGameState() {
+  tutorialStep = 'map';
+  clearTimeout(tutorialHoldTimer); tutorialHoldTimer = null;
+  Object.values(tutorialExpiryTimers).forEach(clearTimeout);
+  tutorialExpiryTimers = {};
+  tutorialExpiredSteps.clear();
   state.leverOpen = false;
   state.current = 'hub';
   state.history = [];
@@ -1418,6 +2464,8 @@ function resetGameState() {
   state.cablesSolved = false;
   state.towerButtons = new Array(25).fill(false);
   state.towerSolved = false;
+  state.mapNode = null;
+  state.explored = [];
   // 'ending' isn't part of the normal zone system (see playEndingFromStart),
   // so nothing else ever silences it — without this it would keep playing
   // at full volume over the new session if "new game" is pressed from the
@@ -1629,10 +2677,12 @@ function repositionOverlays() {
 // updateAmbience/updateMusic recompute + fade back in for state.current
 // on resume (same fade timing they'd use for a normal zone change).
 function muteGameAudio(fadeMs = 200) {
+  setRhythmVolume(0, fadeMs);
   for (const key in ambientTracks) setAmbient(key, 0, fadeMs);
   for (const key in musicTracks) setMusic(key, 0, fadeMs);
 }
 function unmuteGameAudio() {
+  setRhythmVolume(minimapOpen ? 0 : 1);
   updateAmbience(state.current);
   updateMusic(state.current);
 }
@@ -1767,6 +2817,8 @@ function preloadAllAssets() {
 // specifically: they have no other DOM reference to load them, so a
 // mismatched preload left them as a genuine cold fetch on first hover.
 const MENU_UI_IMAGES = [
+  ...Object.values(TUTORIAL_TEXT_IMAGES).map(label => label.src),
+  'assets/minimap/rust.png?v=1',
   'assets/menu-bg.png?v=3',
   'assets/menu-text/title-untorra.png?v=8',
   'assets/menu-text/item-continue-inactive.png?v=2',
@@ -1783,6 +2835,7 @@ const MENU_UI_IMAGES = [
   'assets/menu-text/credits-riley-w-hover.png?v=1',
   'assets/menu-text/credits-line3.png?v=1',
   'assets/menu-text/credits-line4.png?v=1',
+  'assets/cursors/passive-arrow.png',
   'assets/cursors/front.png',
   'assets/cursors/back.png',
   'assets/cursors/left.png',
@@ -1841,12 +2894,16 @@ function init() {
 
   colliderLayer.addEventListener('click', (e) => handleColliderClick(e.clientX, e.clientY));
   colliderLayer.addEventListener('mousemove', (e) => updateColliderCursor(e.clientX, e.clientY));
-  colliderLayer.addEventListener('mouseleave', () => { colliderLayer.style.cursor = 'auto'; });
+  colliderLayer.addEventListener('mouseleave', () => { colliderLayer.style.cursor = CURSOR_CSS.passive; });
 
   let resizeTimer = null;
   window.addEventListener('resize', () => {
     clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(repositionOverlays, 100);
+    resizeTimer = setTimeout(() => {
+      repositionOverlays();
+      // the low-res buffer is sized off the stage, so it has to be redrawn
+      if (minimapOpen) { minimapMeasuredBox = null; scheduleMinimapRefit(); }
+    }, 100);
   });
 
   titleScreen = document.getElementById('title-screen');
@@ -1920,8 +2977,32 @@ function init() {
     window.open(PHYSICAL_OST_URL, '_blank', 'noopener,noreferrer');
   });
 
+  initTutorial();
+  initMinimapControls();
+  loadMinimapDither();
+
+  // Navigation sprites are fetched up front so the first
+  // press of the right button is never a frame of empty reticles.
+  ['target', 'side', 'star'].forEach(n => { new Image().src = 'assets/nav/' + n + '.png?v=1'; });
+
+  // Right button held = "where can I go from here"; the menu it would
+  // normally raise is suppressed over the stage only.
+  const stageEl = document.getElementById('stage');
+  stageEl.addEventListener('contextmenu', (e) => e.preventDefault());
+  stageEl.addEventListener('mousedown', (e) => { if (e.button === 2) showNavMarkers(); });
+  window.addEventListener('mouseup', (e) => { if (e.button === 2) hideNavMarkers(); });
+  window.addEventListener('blur', hideNavMarkers);
+
+  // e.code, not e.key — on a Cyrillic layout the same physical key types "ь"
+  document.addEventListener('keydown', (e) => {
+    if (e.code !== 'KeyM') return;
+    if (minimapOpen) closeMinimap(); else openMinimap();
+  });
+
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape' || !gameStarted) return;
+    // map open -> Esc just closes it, without pausing into the menu
+    if (minimapOpen) { closeMinimap(); return; }
     if (!creditsScreen.classList.contains('hidden')) return; // ignore while in credits
     if (titleScreen.classList.contains('hidden')) {
       // currently in-game -> Esc pauses into the menu

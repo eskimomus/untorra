@@ -7,9 +7,13 @@
 <link rel="icon" type="image/png" sizes="16x16" href="assets/favicon-16.png">
 <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png">
 <link rel="icon" type="image/png" sizes="64x64" href="assets/favicon-64.png">
-<link rel="stylesheet" href="style.css?v=44">
+<link rel="stylesheet" href="style.css?v=75">
+<link rel="stylesheet" href="editor.css?v=11">
 </head>
 <body>
+<svg width="0" height="0" aria-hidden="true" style="position:absolute;pointer-events:none">
+  <defs><filter id="nav-marker-sharp" color-interpolation-filters="sRGB"><feComponentTransfer><feFuncA type="discrete" tableValues="0 1"/></feComponentTransfer></filter></defs>
+</svg>
 <div id="game">
   <div id="stage">
     <div id="scene-wrap">
@@ -21,6 +25,22 @@
     <div id="tablo-layer"></div>
     <div id="collider-layer"></div>
     <div id="hotspot-layer"></div>
+    <div id="nav-markers"></div>
+
+    <div id="minimap" class="hidden">
+      <img id="minimap-title" src="assets/menu-text/map.png?v=1" alt="map">
+      <div id="minimap-view">
+        <div id="minimap-bg"><img id="minimap-rust" src="assets/minimap/rust.png?v=1" alt=""></div>
+        <svg id="minimap-edges" viewBox="0 0 640 480" preserveAspectRatio="none"></svg>
+        <div id="minimap-graph"></div>
+      </div>
+      <canvas id="minimap-raster" width="560" height="420"></canvas>
+    </div>
+
+    <div id="tutorial-hint" data-step="map" aria-live="polite" aria-atomic="true" aria-hidden="true">
+      <div class="tutorial-pill"></div><p><img class="tutorial-copy" src="assets/tutorial/map-text.png?v=1" alt="press M to open the map"></p>
+    </div>
+
     <div id="fade-overlay"></div>
 
     <div id="loading-indicator"><div class="loading-row"><img class="menu-img" src="assets/menu-text/loading-word.png?v=1" alt="loading"><span class="loading-percent-slot" id="loading-percent-slot"></span></div></div>
@@ -46,6 +66,8 @@
     </div>
   </div>
 </div>
-<script src="game.js?v=77"></script>
+<script src="game.js?v=112"></script>
+<script src="editor.js?v=20"></script>
+<script src="game-dither.js?v=36"></script>
 </body>
 </html>
