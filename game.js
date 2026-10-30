@@ -814,15 +814,25 @@ function renderNavMarkers() {
   });
 }
 
+function refreshNavMarkers() {
+  if (!navMarkersHeld) return;
+  const nodeId = state.current;
+  const markerKey = navMarkerKeyFor(nodeId);
+  const colliderKey = navMarkerBaseKey(markerKey);
+  renderNavMarkers();
+  if (COLLIDER_DATA[colliderKey] && !colliderRegions(colliderKey)) {
+    whenColliderReady(colliderKey, () => {
+      if (navMarkersHeld && state.current === nodeId && navMarkerKeyFor(state.current) === markerKey) renderNavMarkers();
+    });
+  }
+}
+
 function showNavMarkers() {
   if (navMarkersHeld || !gameStarted || autoAdvancing || minimapOpen) return;
   if (!titleScreen.classList.contains('hidden')) return;
   if (typeof editorMode !== 'undefined' && editorMode) return;
   navMarkersHeld = true;
-  renderNavMarkers();
-  // on the first press of a screen its map may still be decoding
-  whenColliderReady(colliderKeyFor(state.current),
-                    () => { if (navMarkersHeld) renderNavMarkers(); });
+  refreshNavMarkers();
   document.getElementById('nav-markers').classList.add('show');
   if (tutorialStep === 'directions') {
     clearTimeout(tutorialHoldTimer);
@@ -1642,6 +1652,7 @@ function render() {
   if (node.cableGlow) updateCableGlow();
   if (node.towerGlow) updateTowerGlow();
 
+  refreshNavMarkers();
   if (node.openEndingMenu) openEndingMenu();
   refreshTutorial();
 }
