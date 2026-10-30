@@ -390,7 +390,7 @@ html, body {
 .loading-row, .loading-percent-slot { display: flex; align-items: center; }
 .loading-row { gap: 16px; }
 
-#title-screen, #credits-screen {
+#title-screen, #credits-screen, #settings-screen {
   position: absolute;
   inset: 0;
   z-index: 100;
@@ -410,11 +410,96 @@ html, body {
   pointer-events: none;
   transition: opacity 400ms ease;
 }
-#credits-screen {
+#credits-screen, #settings-screen {
   background: #000;
 }
 #title-screen.assets-ready:not(.hidden) { opacity: 1; pointer-events: auto; }
 #title-screen.hidden, #credits-screen.hidden { opacity: 0; pointer-events: none; }
+#settings-screen.hidden { visibility: hidden; pointer-events: none; }
+
+#settings-screen {
+  --settings-unit: 1px;
+  color: #fff2e9;
+}
+#settings-screen .menu-img {
+  height: calc(34 * var(--settings-unit));
+}
+#settings-back {
+  position: absolute;
+  left: 8.4375%;
+  top: 5.8333333333%;
+}
+#settings-volume-label {
+  position: absolute;
+  left: 8.4375%;
+  top: 37.9166666667%;
+}
+#settings-volume {
+  position: absolute;
+  left: 32.03125%;
+  top: 38.3333333333%;
+  width: 59.53125%;
+  height: calc(32 * var(--settings-unit));
+  appearance: none;
+  -webkit-appearance: none;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  cursor: url("assets/cursors/grab.png") 11 11, pointer;
+}
+#settings-volume::-webkit-slider-runnable-track {
+  height: calc(2 * var(--settings-unit));
+  background: linear-gradient(to right, #fff2e9 var(--volume-fill, 100%), #756e69 var(--volume-fill, 100%));
+}
+#settings-volume::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: calc(4 * var(--settings-unit));
+  height: calc(12 * var(--settings-unit));
+  margin-top: calc(-5 * var(--settings-unit));
+  border: 0;
+  border-radius: 0;
+  background: #fff2e9;
+}
+#settings-volume::-moz-range-track {
+  height: calc(2 * var(--settings-unit));
+  background: #756e69;
+}
+#settings-volume::-moz-range-progress {
+  height: calc(2 * var(--settings-unit));
+  background: #fff2e9;
+}
+#settings-volume::-moz-range-thumb {
+  width: calc(4 * var(--settings-unit));
+  height: calc(12 * var(--settings-unit));
+  border: 0;
+  border-radius: 0;
+  background: #fff2e9;
+}
+#settings-postprocessing-row {
+  position: absolute;
+  left: 8.4375%;
+  top: 53.75%;
+  width: 83.125%;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  cursor: url("assets/cursors/grab.png") 11 11, pointer;
+}
+#settings-postprocessing {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: none;
+  width: calc(22 * var(--settings-unit));
+  height: calc(22 * var(--settings-unit));
+  margin-top: calc(4 * var(--settings-unit));
+  border: calc(2 * var(--settings-unit)) solid #fff2e9;
+  border-radius: 0;
+  background: transparent;
+  cursor: inherit;
+}
+#settings-postprocessing:checked { background: #fff2e9; }
+#settings-screen :focus-visible { outline: calc(1 * var(--settings-unit)) solid #fff2e9; outline-offset: calc(5 * var(--settings-unit)); }
 
 .menu-title {
   position: absolute;

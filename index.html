@@ -7,7 +7,7 @@
 <link rel="icon" type="image/png" sizes="16x16" href="assets/favicon-16.png">
 <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png">
 <link rel="icon" type="image/png" sizes="64x64" href="assets/favicon-64.png">
-<link rel="stylesheet" href="style.css?v=76">
+<link rel="stylesheet" href="style.css?v=77">
 <link rel="stylesheet" href="editor.css?v=12">
 </head>
 <body>
@@ -50,10 +50,21 @@
       <nav class="menu-list">
         <button id="menu-continue" class="menu-item"><img class="menu-img" src="assets/menu-text/item-continue-inactive.png?v=2" alt="continue"></button>
         <button id="menu-newgame" class="menu-item active"><img class="menu-img" src="assets/menu-text/item-newgame.png?v=2" alt="new game"></button>
+        <button id="menu-settings" class="menu-item active"><img class="menu-img" src="assets/menu-text/item-settings.png?v=1" alt="settings"></button>
         <button id="menu-credits" class="menu-item active"><img class="menu-img" src="assets/menu-text/item-credits.png?v=2" alt="credits"></button>
         <button id="menu-store" class="menu-item active"><img class="menu-img" src="assets/menu-text/item-physical-ost.png?v=1" alt="physical OST"></button>
       </nav>
     </div>
+
+    <section id="settings-screen" class="hidden" aria-label="settings" inert>
+      <button id="settings-back" class="menu-item active"><img class="menu-img" src="assets/menu-text/settings-back.png?v=1" alt="< back"></button>
+      <label id="settings-volume-label" for="settings-volume"><img class="menu-img" src="assets/menu-text/settings-volume.png?v=1" alt="volume"></label>
+      <input id="settings-volume" type="range" min="0" max="100" step="1" value="100" aria-labelledby="settings-volume-label">
+      <label id="settings-postprocessing-row" for="settings-postprocessing">
+        <img class="menu-img" src="assets/menu-text/settings-postprocessing.png?v=1" alt="post processing (f8)">
+        <input id="settings-postprocessing" type="checkbox">
+      </label>
+    </section>
 
     <div id="credits-screen" class="hidden">
       <button id="credits-back" class="menu-item active menu-title"><img class="menu-img" src="assets/menu-text/item-back.png?v=2" alt="< back"></button>
@@ -66,8 +77,8 @@
     </div>
   </div>
 </div>
-<script src="game.js?v=114"></script>
+<script src="game.js?v=115"></script>
 <script src="editor.js?v=20"></script>
-<script src="game-dither.js?v=38"></script>
+<script src="game-dither.js?v=39"></script>
 </body>
 </html>

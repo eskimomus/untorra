@@ -48,19 +48,19 @@ function playOneShot(file, vol, rhythm = false) {
     if (rhythm && !rhythmGainNode) {
       rhythmGainNode = audioCtx.createGain();
       rhythmGainNode.gain.value = rhythmVolume;
-      rhythmGainNode.connect(audioCtx.destination);
+      rhythmGainNode.connect(masterGainNode);
     }
-    gainNode.connect(rhythm ? rhythmGainNode : audioCtx.destination);
+    gainNode.connect(rhythm ? rhythmGainNode : masterGainNode);
     src.start(0);
     return src;
   }
   const audio = new Audio(sound(file));
-  audio.volume = volume * (rhythm ? rhythmVolume : 1);
-  if (rhythm) {
-    rhythmFallbackAudio.set(audio, volume);
-    audio.addEventListener('ended', () => rhythmFallbackAudio.delete(audio), { once: true });
-  }
-  audio.play().catch(() => {});
+  audio.volume = Math.min(1, volume * masterVolume * (rhythm ? rhythmVolume : 1));
+  fallbackAudio.set(audio, { volume, rhythm });
+  const cleanup = () => fallbackAudio.delete(audio);
+  audio.addEventListener('ended', cleanup, { once: true });
+  audio.addEventListener('error', cleanup, { once: true });
+  audio.play().catch(cleanup);
   return audio;
 }
 
@@ -177,9 +177,39 @@ const MUSIC_INDUSTRIAL_NODES = new Set([
 // sample-accurately with zero gap, and is never paused — only its GainNode's
 // volume moves, so re-entering a zone is instant, not a restart.
 let audioCtx = null;
+let masterGainNode = null, masterVolume = 1;
+const MASTER_VOLUME_STORE = 'untorra-master-volume';
 let rhythmGainNode = null, rhythmVolume = 1;
-const rhythmFallbackAudio = new Map();
+const fallbackAudio = new Map();
 const ambientTracks = {};
+
+function syncFallbackAudio() {
+  for (const [audio, voice] of fallbackAudio) {
+    audio.volume = Math.min(1, voice.volume * masterVolume * (voice.rhythm ? rhythmVolume : 1));
+  }
+}
+
+function setMasterVolume(value, persist = false) {
+  if (!Number.isFinite(Number(value))) return;
+  const amount = Math.max(0, Math.min(100, Math.round(Number(value))));
+  masterVolume = amount / 100;
+  if (masterGainNode) {
+    const now = audioCtx.currentTime;
+    masterGainNode.gain.cancelScheduledValues(now);
+    masterGainNode.gain.setValueAtTime(masterGainNode.gain.value, now);
+    masterGainNode.gain.linearRampToValueAtTime(masterVolume, now + 0.03);
+  }
+  syncFallbackAudio();
+  const slider = document.getElementById('settings-volume');
+  if (slider) {
+    slider.value = String(amount);
+    slider.setAttribute('aria-valuetext', amount + '%');
+    slider.style.setProperty('--volume-fill', amount + '%');
+  }
+  if (persist) {
+    try { localStorage.setItem(MASTER_VOLUME_STORE, String(amount)); } catch (error) {}
+  }
+}
 
 // The source .ogg loops weren't recorded with a matching start/end sample —
 // there's a real amplitude jump at the wrap point (measured, not assumed:
@@ -324,11 +354,14 @@ function ensureTrackSources() {
 
 function initAmbientTracks() {
   audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  masterGainNode = audioCtx.createGain();
+  masterGainNode.gain.value = masterVolume;
+  masterGainNode.connect(audioCtx.destination);
   const promises = [];
   for (const key in AMBIENT_FILES) {
     const gainNode = audioCtx.createGain();
     gainNode.gain.value = 0;
-    gainNode.connect(audioCtx.destination);
+    gainNode.connect(masterGainNode);
     const t = { gainNode, source: null, buffer: null };
     ambientTracks[key] = t;
     const p = fetchDecodeAudio(sound(AMBIENT_FILES[key]))
@@ -364,7 +397,7 @@ function setRhythmVolume(target, fadeMs = 200) {
     gain.setValueAtTime(gain.value, now);
     gain.linearRampToValueAtTime(target, now + fadeMs / 1000);
   }
-  for (const [audio, volume] of rhythmFallbackAudio) audio.volume = volume * target;
+  syncFallbackAudio();
 }
 
 function updateAmbience(nodeId, fadeMs = AMBIENT_FADE_MS) {
@@ -394,7 +427,7 @@ function initMusicTracks() {
   for (const key in MUSIC_FILES) {
     const gainNode = audioCtx.createGain();
     gainNode.gain.value = 0;
-    gainNode.connect(audioCtx.destination);
+    gainNode.connect(masterGainNode);
     const t = { gainNode, source: null, buffer: null };
     musicTracks[key] = t;
     const p = fetchDecodeAudio(musicSound(MUSIC_FILES[key]))
@@ -1380,6 +1413,32 @@ let imgA, imgB, activeImg;
 let sceneReady = Promise.resolve(true);
 let hotspotLayer, tabloLayer, colliderLayer, fadeOverlay, sceneWrap, vignetteEl;
 let titleScreen, creditsScreen, newGameBtn, continueBtn, continueImg, creditsBtn, creditsBackBtn, storeBtn;
+let settingsScreen, settingsBtn, settingsBackBtn;
+
+function closeSettings() {
+  settingsScreen.classList.add('hidden');
+  settingsScreen.inert = true;
+  titleScreen.inert = false;
+  settingsBtn.focus({ preventScroll: true });
+}
+
+function initSettings() {
+  settingsScreen = document.getElementById('settings-screen');
+  settingsBtn = document.getElementById('menu-settings');
+  settingsBackBtn = document.getElementById('settings-back');
+  const resize = () => settingsScreen.style.setProperty('--settings-unit', (document.getElementById('stage').clientWidth / 640) + 'px');
+  resize();
+  new ResizeObserver(resize).observe(document.getElementById('stage'));
+  settingsBtn.addEventListener('click', () => {
+    hideNavMarkers();
+    titleScreen.inert = true;
+    settingsScreen.inert = false;
+    settingsScreen.classList.remove('hidden');
+    settingsBackBtn.focus({ preventScroll: true });
+  });
+  settingsBackBtn.addEventListener('click', closeSettings);
+  document.getElementById('settings-volume').addEventListener('input', event => setMasterVolume(event.target.value, true));
+}
 
 // Credits-screen links (name credit, "Riley W") swap to a separate
 // pre-rendered hover-color image on mouseenter/mouseleave — same "bake the
@@ -2838,6 +2897,10 @@ const MENU_UI_IMAGES = [
   'assets/menu-text/item-continue-inactive.png?v=2',
   'assets/menu-text/item-continue-active.png?v=2',
   'assets/menu-text/item-newgame.png?v=2',
+  'assets/menu-text/item-settings.png?v=1',
+  'assets/menu-text/settings-back.png?v=1',
+  'assets/menu-text/settings-volume.png?v=1',
+  'assets/menu-text/settings-postprocessing.png?v=1',
   'assets/menu-text/item-credits.png?v=2',
   'assets/menu-text/item-physical-ost.png?v=1',
   'assets/menu-text/item-back.png?v=2',
@@ -2880,6 +2943,10 @@ function openEndingMenu() {
 }
 
 function init() {
+  try {
+    const saved = localStorage.getItem(MASTER_VOLUME_STORE);
+    if (saved !== null) setMasterVolume(saved);
+  } catch (error) {}
   // Not registered with preloadTrack() — these ARE the glyphs the percent
   // readout itself is drawn with, so warming them can't be gated on the
   // percent they'd be reporting on.
@@ -2937,6 +3004,8 @@ function init() {
   creditsBtn = document.getElementById('menu-credits');
   creditsBackBtn = document.getElementById('credits-back');
   storeBtn = document.getElementById('menu-store');
+  initSettings();
+  setMasterVolume(masterVolume * 100);
 
   CREDITS_LINKS.forEach(({ id, normal, hover }) => {
     const img = document.getElementById(id);
@@ -3014,7 +3083,9 @@ function init() {
   });
 
   document.addEventListener('keydown', (e) => {
-    if (e.key !== 'Escape' || !gameStarted) return;
+    if (e.key !== 'Escape') return;
+    if (!settingsScreen.classList.contains('hidden')) { closeSettings(); return; }
+    if (!gameStarted) return;
     // map open -> Esc just closes it, without pausing into the menu
     if (minimapOpen) { closeMinimap(); return; }
     if (!creditsScreen.classList.contains('hidden')) return; // ignore while in credits

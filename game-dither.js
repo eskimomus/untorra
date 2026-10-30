@@ -65,7 +65,7 @@
     vignetteSize: { label: 'размер виньетки', aria: 'Размер виньетки' },
   };
   let enabled = !IS_SAFARI, mix = 0.32, noise = 0.38, crt = 0.1, bloom = 0.75;
-  let stage, filter, mixNode, controls, enabledInput;
+  let stage, filter, mixNode, controls, enabledInput, menuEnabledInput;
   let bloomHighlightsNode, bloomBlurNode;
   let scanlineLayer, noiseLayer, noiseTexture, pipelineKey = '';
   let indexedMapVisible = false;
@@ -131,6 +131,7 @@
     for (const id of ['vignette', 'grain']) document.getElementById(id).style.display = value.strength === 0 ? 'none' : '';
   }
   function syncControls() {
+    if (menuEnabledInput) menuEnabledInput.checked = enabled;
     if (!controls) return;
     enabledInput.checked = enabled;
     for (const [name, fields] of Object.entries(inputs)) {
@@ -294,6 +295,8 @@
       }
     } catch (_) {}
     buildControls();
+    menuEnabledInput = document.getElementById('settings-postprocessing');
+    if (menuEnabledInput) menuEnabledInput.addEventListener('change', () => setEnabled(menuEnabledInput.checked, true));
     document.addEventListener('untorra:screenchange', event => {
       currentScreen = event.detail;
       applyVignette(); syncControls();
