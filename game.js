@@ -331,11 +331,25 @@ async function fadeStartupLogo(logo, from, to) {
   animation.cancel();
 }
 
+async function prepareStartupLogo(logo) {
+  const image = logo.querySelector('img');
+  await image.decode();
+  const canvas = logo.querySelector('canvas');
+  const context = canvas.getContext('2d');
+  if (context) {
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = 'high';
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    image.hidden = true;
+    canvas.hidden = false;
+  }
+}
+
 async function playStartupSplash() {
   const splash = document.getElementById('startup-splash');
   if (!splash) return;
   const logos = [...splash.querySelectorAll('.startup-logo')];
-  const ready = logos.map(logo => logo.decode().then(() => true, () => false));
+  const ready = logos.map(logo => prepareStartupLogo(logo).then(() => true, () => false));
   let gapReady = Promise.resolve();
   try {
     for (let index = 0; index < logos.length; index++) {
@@ -344,8 +358,9 @@ async function playStartupSplash() {
       await fadeStartupLogo(logos[index], 0, 1);
       await startupDelay(STARTUP_HOLD_MS);
       await fadeStartupLogo(logos[index], 1, 0);
-      if (index + 1 < logos.length) gapReady = startupDelay(STARTUP_GAP_MS);
+      gapReady = startupDelay(STARTUP_GAP_MS);
     }
+    await gapReady;
   } finally {
     splash.hidden = true;
   }

@@ -9,7 +9,7 @@
 <link rel="icon" type="image/png" sizes="64x64" href="assets/favicon-64.png">
 <link rel="preload" as="image" href="assets/startup/publisher.png?v=1" fetchpriority="high">
 <link rel="preload" as="image" href="assets/startup/creator.png?v=1" fetchpriority="high">
-<link rel="stylesheet" href="style.css?v=79">
+<link rel="stylesheet" href="style.css?v=80">
 <link rel="stylesheet" href="editor.css?v=12">
 </head>
 <body>
@@ -45,6 +45,17 @@
 
     <div id="fade-overlay"></div>
 
+    <div id="startup-splash">
+      <div id="startup-publisher" class="startup-logo">
+        <img src="assets/startup/publisher.png?v=1" alt="Callback" decoding="async" fetchpriority="high">
+        <canvas width="320" height="240" role="img" aria-label="Callback" hidden></canvas>
+      </div>
+      <div id="startup-creator" class="startup-logo">
+        <img src="assets/startup/creator.png?v=1" alt="Matthew Swan" decoding="async" fetchpriority="high">
+        <canvas width="320" height="240" role="img" aria-label="Matthew Swan" hidden></canvas>
+      </div>
+    </div>
+
     <div id="loading-indicator" class="hidden" hidden><div class="loading-row"><img class="menu-img" src="assets/menu-text/loading-word.png?v=1" alt="loading"><span class="loading-percent-slot" id="loading-percent-slot"></span></div></div>
 
     <div id="title-screen">
@@ -78,12 +89,8 @@
       </div>
     </div>
   </div>
-  <div id="startup-splash">
-    <img class="startup-logo" src="assets/startup/publisher.png?v=1" alt="Callback" decoding="async" fetchpriority="high">
-    <img class="startup-logo" src="assets/startup/creator.png?v=1" alt="Matthew Swan" decoding="async" fetchpriority="high">
-  </div>
 </div>
-<script src="game.js?v=117"></script>
+<script src="game.js?v=118"></script>
 <script src="editor.js?v=20"></script>
 <script src="game-dither.js?v=39"></script>
 </body>
