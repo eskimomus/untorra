@@ -421,9 +421,6 @@ html, body {
   --settings-unit: 1px;
   color: #fff2e9;
 }
-#settings-screen .menu-img {
-  height: calc(34 * var(--settings-unit));
-}
 #settings-back {
   position: absolute;
   left: 8.4375%;
@@ -432,7 +429,8 @@ html, body {
 #settings-volume-label {
   position: absolute;
   left: 8.4375%;
-  top: 37.9166666667%;
+  top: 41.6666666667%;
+  transform: translateY(-50%);
 }
 #settings-volume {
   position: absolute;
@@ -481,8 +479,9 @@ html, body {
   left: 8.4375%;
   top: 53.75%;
   width: 83.125%;
+  height: 6.25%;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   cursor: url("assets/cursors/grab.png") 11 11, pointer;
 }
@@ -492,7 +491,6 @@ html, body {
   flex: none;
   width: calc(22 * var(--settings-unit));
   height: calc(22 * var(--settings-unit));
-  margin-top: calc(4 * var(--settings-unit));
   border: calc(2 * var(--settings-unit)) solid #fff2e9;
   border-radius: 0;
   background: transparent;
