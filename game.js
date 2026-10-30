@@ -312,6 +312,60 @@ function stopLoadingIndicator() {
   indicator.hidden = true;
 }
 
+const STARTUP_FADE_MS = 800;
+const STARTUP_HOLD_MS = 1000;
+const STARTUP_GAP_MS = 1000;
+
+function startupDelay(duration) {
+  return new Promise(resolve => setTimeout(resolve, duration));
+}
+
+async function fadeStartupLogo(logo, from, to) {
+  const animation = logo.animate([{ opacity: from }, { opacity: to }], {
+    duration: STARTUP_FADE_MS,
+    easing: 'ease-in-out',
+    fill: 'forwards',
+  });
+  await animation.finished;
+  logo.style.opacity = String(to);
+  animation.cancel();
+}
+
+async function playStartupSplash() {
+  const splash = document.getElementById('startup-splash');
+  if (!splash) return;
+  const logos = [...splash.querySelectorAll('.startup-logo')];
+  const ready = logos.map(logo => logo.decode().then(() => true, () => false));
+  let gapReady = Promise.resolve();
+  try {
+    for (let index = 0; index < logos.length; index++) {
+      const [decoded] = await Promise.all([ready[index], gapReady]);
+      if (!decoded) continue;
+      await fadeStartupLogo(logos[index], 0, 1);
+      await startupDelay(STARTUP_HOLD_MS);
+      await fadeStartupLogo(logos[index], 1, 0);
+      if (index + 1 < logos.length) gapReady = startupDelay(STARTUP_GAP_MS);
+    }
+  } finally {
+    splash.hidden = true;
+  }
+}
+
+async function finishStartup(splashReady, assetsReady) {
+  let loaded = false;
+  const loadingReady = assetsReady.then(() => { loaded = true; });
+  await splashReady;
+  if (!loaded) {
+    const indicator = document.getElementById('loading-indicator');
+    indicator.hidden = false;
+    indicator.classList.remove('hidden');
+  }
+  await loadingReady;
+  stopLoadingIndicator();
+  document.getElementById('stage').inert = false;
+  titleScreen.classList.add('assets-ready');
+}
+
 // Fetch + decode with retries. A transient failure here used to be fatal
 // for that track for the whole session: the .catch just warned, t.source
 // stayed null, and nothing anywhere retried or restarted it. With ~200
@@ -2890,6 +2944,8 @@ function preloadAllAssets() {
 // specifically: they have no other DOM reference to load them, so a
 // mismatched preload left them as a genuine cold fetch on first hover.
 const MENU_UI_IMAGES = [
+  'assets/startup/publisher.png?v=1',
+  'assets/startup/creator.png?v=1',
   ...Object.values(TUTORIAL_TEXT_IMAGES).map(label => label.src),
   'assets/minimap/rust.png?v=1',
   'assets/menu-bg.png?v=3',
@@ -2943,6 +2999,7 @@ function openEndingMenu() {
 }
 
 function init() {
+  const splashReady = playStartupSplash().catch(error => console.warn('Startup splash failed:', error));
   try {
     const saved = localStorage.getItem(MASTER_VOLUME_STORE);
     if (saved !== null) setMasterVolume(saved);
@@ -2993,10 +3050,7 @@ function init() {
   // synchronously) — safe to draw the starting "0%" (or wherever a couple
   // of instant cache hits already put it) before anything else resolves.
   renderLoadingPercent();
-  Promise.all([ambientReady, musicReady, allAssetsReady, menuReady]).then(() => {
-    stopLoadingIndicator();
-    titleScreen.classList.add('assets-ready');
-  });
+  finishStartup(splashReady, Promise.all([ambientReady, musicReady, allAssetsReady, menuReady]));
   creditsScreen = document.getElementById('credits-screen');
   newGameBtn = document.getElementById('menu-newgame');
   continueBtn = document.getElementById('menu-continue');
