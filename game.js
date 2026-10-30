@@ -1483,12 +1483,55 @@ let sceneReady = Promise.resolve(true);
 let hotspotLayer, tabloLayer, colliderLayer, fadeOverlay, sceneWrap, vignetteEl;
 let titleScreen, creditsScreen, newGameBtn, continueBtn, continueImg, creditsBtn, creditsBackBtn, storeBtn;
 let settingsScreen, settingsBtn, settingsBackBtn;
+const MENU_FADE_MS = 800;
+let menuTransitioning = false;
+
+async function transitionMenuScreen(swap) {
+  const stage = document.getElementById('stage');
+  if (menuTransitioning || stage.inert) return;
+  const overlay = document.getElementById('menu-fade-overlay');
+  const timing = { duration: MENU_FADE_MS, easing: 'ease-in-out', fill: 'forwards' };
+  let animation, focusTarget;
+  menuTransitioning = true;
+  stage.inert = true;
+  stage.classList.add('menu-transitioning');
+  hideNavMarkers();
+  try {
+    animation = overlay.animate([{ opacity: 0 }, { opacity: 1 }], timing);
+    await animation.finished;
+    overlay.style.opacity = '1';
+    animation.cancel();
+    focusTarget = await swap();
+    void stage.offsetWidth;
+    animation = overlay.animate([{ opacity: 1 }, { opacity: 0 }], timing);
+    await animation.finished;
+  } finally {
+    overlay.style.opacity = '0';
+    if (animation) animation.cancel();
+    stage.classList.remove('menu-transitioning');
+    stage.inert = false;
+    menuTransitioning = false;
+    if (focusTarget) focusTarget.focus({ preventScroll: true });
+  }
+}
 
 function closeSettings() {
-  settingsScreen.classList.add('hidden');
-  settingsScreen.inert = true;
-  titleScreen.inert = false;
-  settingsBtn.focus({ preventScroll: true });
+  return transitionMenuScreen(() => {
+    settingsScreen.classList.add('hidden');
+    settingsScreen.inert = true;
+    titleScreen.inert = false;
+    return settingsBtn;
+  });
+}
+
+function closeCredits() {
+  return transitionMenuScreen(() => {
+    creditsScreen.classList.add('hidden');
+    creditsScreen.inert = true;
+    titleScreen.classList.remove('hidden');
+    titleScreen.inert = false;
+    return creditsBtn;
+  });
 }
 
 function initSettings() {
@@ -1499,11 +1542,12 @@ function initSettings() {
   resize();
   new ResizeObserver(resize).observe(document.getElementById('stage'));
   settingsBtn.addEventListener('click', () => {
-    hideNavMarkers();
-    titleScreen.inert = true;
-    settingsScreen.inert = false;
-    settingsScreen.classList.remove('hidden');
-    settingsBackBtn.focus({ preventScroll: true });
+    transitionMenuScreen(() => {
+      titleScreen.inert = true;
+      settingsScreen.inert = false;
+      settingsScreen.classList.remove('hidden');
+      return settingsBackBtn;
+    });
   });
   settingsBackBtn.addEventListener('click', closeSettings);
   document.getElementById('settings-volume').addEventListener('input', event => setMasterVolume(event.target.value, true));
@@ -2830,8 +2874,44 @@ function unmuteGameAudio() {
 }
 
 function resumeGame() {
-  titleScreen.classList.add('hidden');
-  unmuteGameAudio();
+  return transitionMenuScreen(() => {
+    titleScreen.classList.add('hidden');
+    unmuteGameAudio();
+  });
+}
+
+function pauseGame() {
+  if (menuTransitioning) return;
+  muteGameAudio(MENU_FADE_MS);
+  return transitionMenuScreen(() => {
+    continueBtn.style.display = '';
+    continueBtn.classList.add('active');
+    continueImg.src = 'assets/menu-text/item-continue-active.png?v=2';
+    titleScreen.classList.remove('hidden');
+    return continueBtn;
+  });
+}
+
+function startNewGame() {
+  tryResumeAudio();
+  return transitionMenuScreen(async () => {
+    await startupDelay(500);
+    resetGameState();
+    gameStarted = true;
+    continueBtn.style.display = '';
+    titleScreen.classList.add('hidden');
+    const transitionA = imgA.style.transition, transitionB = imgB.style.transition;
+    imgA.style.transition = 'none';
+    imgB.style.transition = 'none';
+    try {
+      render();
+      await sceneReady;
+      void imgA.offsetWidth;
+    } finally {
+      imgA.style.transition = transitionA;
+      imgB.style.transition = transitionB;
+    }
+  });
 }
 
 // Hard-restarts 'ending' from sample 0 at full volume, no fade — a fresh
@@ -3082,32 +3162,7 @@ function init() {
     img.addEventListener('mouseleave', () => { img.src = normal; });
   });
 
-  newGameBtn.addEventListener('click', () => {
-    tryResumeAudio();
-    // fade to black, hold there, swap the menu for the actual game while
-    // still hidden, then fade back in on hub — same fadeOverlay primitive
-    // every other scripted transition uses (startAutoAdvance), just
-    // triggered by a click instead of firing on node arrival. render()
-    // itself removes fadeOverlay's "show" class (via stopAutoAdvance(),
-    // which exists to cancel an in-flight auto-advance fade) — that's what
-    // actually starts the fade-back-out, so the hold has to happen *before*
-    // render() runs, not after, or it gets skipped.
-    const FADE_IN_MS = 800;
-    const HOLD_MS = 500;
-    const FADE_OUT_MS = 3000;
-    continueBtn.style.display = ''; // in case this is a restart from the ending menu
-    fadeOverlay.style.transitionDuration = FADE_IN_MS + 'ms';
-    fadeOverlay.classList.add('show');
-    setTimeout(() => {
-      setTimeout(() => {
-        resetGameState();
-        gameStarted = true;
-        titleScreen.classList.add('hidden');
-        fadeOverlay.style.transitionDuration = FADE_OUT_MS + 'ms';
-        render();
-      }, HOLD_MS);
-    }, FADE_IN_MS);
-  });
+  newGameBtn.addEventListener('click', startNewGame);
 
   continueBtn.addEventListener('click', () => {
     if (!gameStarted) return;
@@ -3115,14 +3170,16 @@ function init() {
   });
 
   creditsBtn.addEventListener('click', () => {
-    titleScreen.classList.add('hidden');
-    creditsScreen.classList.remove('hidden');
+    transitionMenuScreen(() => {
+      titleScreen.classList.add('hidden');
+      titleScreen.inert = true;
+      creditsScreen.inert = false;
+      creditsScreen.classList.remove('hidden');
+      return creditsBackBtn;
+    });
   });
 
-  creditsBackBtn.addEventListener('click', () => {
-    creditsScreen.classList.add('hidden');
-    titleScreen.classList.remove('hidden');
-  });
+  creditsBackBtn.addEventListener('click', closeCredits);
 
   const PHYSICAL_OST_URL = 'https://empyrean-records.myshopify.com/products/emp08-matt-swan-untorra?variant=58441317876056&fbclid=PAVERFWAUP-01wZG9mAmZkaWQWUOJ1nD-ZMF8bUdVJL1m4505smNTyAGV4dG4DYWVtAjEwAHNydGMGYXBwX2lkDzEyNDAyNDU3NDI4NzQxNAABp5m0VqzVoXrEwh6ff7j49Ht8EsjI4x8pQBNlyHNNkAdX3AuaTs4gkC5QjZdr_aem_-3HFpAclP3xkbL9aanGAGw';
   storeBtn.addEventListener('click', () => {
@@ -3147,24 +3204,20 @@ function init() {
 
   // e.code, not e.key — on a Cyrillic layout the same physical key types "ь"
   document.addEventListener('keydown', (e) => {
-    if (e.code !== 'KeyM') return;
+    if (e.code !== 'KeyM' || menuTransitioning) return;
     if (minimapOpen) closeMinimap(); else openMinimap();
   });
 
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
+    if (menuTransitioning) return;
     if (!settingsScreen.classList.contains('hidden')) { closeSettings(); return; }
+    if (!creditsScreen.classList.contains('hidden')) { closeCredits(); return; }
     if (!gameStarted) return;
     // map open -> Esc just closes it, without pausing into the menu
     if (minimapOpen) { closeMinimap(); return; }
-    if (!creditsScreen.classList.contains('hidden')) return; // ignore while in credits
     if (titleScreen.classList.contains('hidden')) {
-      // currently in-game -> Esc pauses into the menu
-      continueBtn.style.display = '';
-      continueBtn.classList.add('active');
-      continueImg.src = 'assets/menu-text/item-continue-active.png?v=2';
-      titleScreen.classList.remove('hidden');
-      muteGameAudio();
+      pauseGame();
     } else {
       // menu already open -> Esc acts exactly like clicking continue
       resumeGame();

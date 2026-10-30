@@ -376,6 +376,16 @@ html, body {
   border-color: rgba(230,140,90,0.75);
 }
 
+#menu-fade-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 310;
+  background: #000;
+  opacity: 0;
+  pointer-events: none;
+}
+#stage.menu-transitioning #title-screen { transition: none; }
+
 #startup-splash {
   position: absolute;
   inset: 0;

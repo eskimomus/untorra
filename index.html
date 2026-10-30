@@ -9,7 +9,7 @@
 <link rel="icon" type="image/png" sizes="64x64" href="assets/favicon-64.png">
 <link rel="preload" as="image" href="assets/startup/publisher.png?v=1" fetchpriority="high">
 <link rel="preload" as="image" href="assets/startup/creator.png?v=1" fetchpriority="high">
-<link rel="stylesheet" href="style.css?v=80">
+<link rel="stylesheet" href="style.css?v=81">
 <link rel="stylesheet" href="editor.css?v=12">
 </head>
 <body>
@@ -79,7 +79,7 @@
       </label>
     </section>
 
-    <div id="credits-screen" class="hidden">
+    <div id="credits-screen" class="hidden" inert>
       <button id="credits-back" class="menu-item active menu-title"><img class="menu-img" src="assets/menu-text/item-back.png?v=2" alt="< back"></button>
       <div class="menu-list credits-body">
         <div class="credits-line credits-name-line"><a class="credits-link" id="credits-link-swan" href="https://matt-swan.art" target="_blank" rel="noopener noreferrer"><img class="menu-img" id="credits-img-swan" src="assets/menu-text/credits-matthew-swan.png?v=1" alt="matthew swan"></a><img class="menu-img" src="assets/menu-text/credits-comma-2026.png?v=1" alt=", 2026"></div>
@@ -89,8 +89,9 @@
       </div>
     </div>
   </div>
+  <div id="menu-fade-overlay" aria-hidden="true"></div>
 </div>
-<script src="game.js?v=119"></script>
+<script src="game.js?v=120"></script>
 <script src="editor.js?v=20"></script>
 <script src="game-dither.js?v=39"></script>
 </body>
