@@ -1,4 +1,4 @@
-import { isTripScene } from './story.js?v=12';
+import { isTripScene } from './story.js?v=13';
 
 const VERTEX_SOURCE = `
 attribute vec2 position;

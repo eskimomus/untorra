@@ -21,7 +21,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-v
   transform: translate(-50%, -50%);
   overflow: hidden;
   background: #000;
-  cursor: url('assets/cursors/passive.png') 0 0, default;
+  cursor: url('assets/cursors/passive-arrow.png?v=1') 0 0, default;
 }
 #stage[data-animated="true"].game-dither-enabled,
 #stage[data-matched-still="true"].game-dither-enabled { filter: none; }
@@ -35,7 +35,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-v
 .copy[data-appearance="echo"] { z-index: 1; }
 .copy[data-appearance="main"] { z-index: 3; }
 .copy[data-appearance="instant"] { opacity: 1; z-index: 3; }
-.scene-button:disabled { cursor: default; }
+.scene-button:disabled { cursor: inherit; }
 #fade-overlay { background: #000; opacity: 0; }
 #start-ending {
   position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);

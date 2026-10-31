@@ -1,9 +1,16 @@
-import { SceneClock } from './story.js?v=12';
+import { SceneClock } from './story.js?v=13';
 
 export function syncAnimations(animations, paused) {
   for (const animation of animations) {
     if (paused && animation.playState === 'running') animation.pause();
     else if (!paused && animation.playState === 'paused') animation.play();
+  }
+}
+
+export function syncSceneAnimations(animations, { suspended, transitioning, waitingForGesture }) {
+  for (const animation of animations) {
+    const paused = suspended || waitingForGesture || (transitioning && animation.id !== 'echo-jitter');
+    syncAnimations([animation], paused);
   }
 }
 
@@ -20,7 +27,7 @@ export function echoRevealGroups(mainPositions, echoPositions) {
 }
 
 export function echoJitterFrames(random = Math.random, scale = 1) {
-  return Array.from({ length: 20 }, () => ({ transform: `translate(${Math.round((random() - 0.5) * 4) / scale}px, ${Math.round((random() - 0.5) * 4) / scale}px)`, easing: 'steps(1, end)' }));
+  return Array.from({ length: 20 }, () => ({ transform: `translate(${Math.round((random() - 0.5) * 2) / scale}px, ${Math.round((random() - 0.5) * 2) / scale}px)`, easing: 'steps(1, end)' }));
 }
 
 export function typingTokens(text, { atomicWords = [], voice = 'player', random = Math.random } = {}) {

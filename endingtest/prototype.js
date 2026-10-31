@@ -1,6 +1,6 @@
-import { SCENES, GOD_PROFILES, VISITOR_PLANS, sceneById, cleanName, transitionFor, createRun, advanceRun, previewScene, decisionSnapshot, isTripScene, isSeamlessTransition, SceneClock } from './story.js?v=12';
-import { PsychedelicRenderer, EndingAudio } from './psychedelic.js?v=14';
-import { Sequence, TypingAudio, typingTokens, syncAnimations, echoRevealGroups, echoJitterFrames } from './text-presentation.js?v=8';
+import { SCENES, GOD_PROFILES, VISITOR_PLANS, sceneById, cleanName, transitionFor, createRun, advanceRun, previewScene, decisionSnapshot, isTripScene, isSeamlessTransition, SceneClock } from './story.js?v=13';
+import { PsychedelicRenderer, EndingAudio } from './psychedelic.js?v=15';
+import { Sequence, TypingAudio, typingTokens, syncAnimations, syncSceneAnimations, echoRevealGroups, echoJitterFrames } from './text-presentation.js?v=9';
 import { VideoCaption } from './video-presentation.js?v=4';
 
 const sceneHost = document.getElementById('scene');
@@ -11,7 +11,7 @@ const repeatTripVideo = document.getElementById('repeat-trip-video');
 const killVideo = document.getElementById('kill-video');
 const afterKillVideo = document.getElementById('after-kill-video');
 const godDeathVideo = document.getElementById('god-death-video');
-const sceneVideos = new Map([['3a', killVideo], ['3a-after', afterKillVideo], ['7a', tripVideo], ['13a', godDeathVideo], ['14d', killVideo], ['15d', repeatTripVideo], ['15e', repeatTripVideo]]);
+const sceneVideos = new Map([['3a', killVideo], ['3a-after', afterKillVideo], ['3c', killVideo], ['7a', tripVideo], ['13a', godDeathVideo], ['14d', killVideo], ['15d', repeatTripVideo], ['15e', repeatTripVideo]]);
 const videos = Array.from(new Set(sceneVideos.values()));
 const fadeOverlay = document.getElementById('fade-overlay');
 const startButton = document.getElementById('start-ending');
@@ -377,9 +377,6 @@ function fadeElements(elements, duration) {
   for (const element of elements) {
     element.style.opacity = '1';
     element.animate([{ opacity: 0 }, { opacity: 1 }], { duration, fill: 'both', easing: 'ease-out' });
-    if (element.dataset.appearance === 'echo' && !state.reduced) {
-      element.animate(echoJitterFrames(Math.random, nativeScale), { duration: 800 + Math.random() * 400, iterations: Infinity });
-    }
   }
 }
 
@@ -395,6 +392,10 @@ function presentText(id) {
   const main = Array.from(layout.querySelectorAll('[data-appearance="main"]'));
   const echoes = Array.from(layout.querySelectorAll('[data-appearance="echo"]'));
   const controls = Array.from(layout.querySelectorAll('[data-appearance="control"]'));
+  if (!state.reduced) for (const element of echoes) {
+    const animation = element.animate(echoJitterFrames(Math.random, nativeScale), { duration: 800 + Math.random() * 400, iterations: Infinity });
+    animation.id = 'echo-jitter';
+  }
   const revealDuration = state.reduced ? 200 : 700;
   const echoStagger = state.reduced ? 80 : 180;
   const departing = layout.querySelector('.departing-visitor');
@@ -494,11 +495,11 @@ function showScene(id) {
   status.textContent = `${id === 'end' ? 'Конец ' + (state.outcome ?? 'теста') + '. Повтор — «С начала».' : 'screen ' + id + ' · ' + definition.title}${clock.reasons.size ? ' · пауза' : ''}`;
   skipButton.disabled = !transitionFor(id, 'auto', state);
   exportButton.disabled = state.decisions.length === 0;
-  document.getElementById('fixture-summary').textContent = `Локальные записи, не сервер. Бог: ${state.god.name} (${state.god.response === 'release' ? 'отпустит' : 'убьёт'}). ${state.visitor ? 'Гость: ' + state.visitor.name + ' · ' + (state.visitor.decision === 'take' ? 'YES' : 'NO') + '.' : ''}`;
+  updateFixtureSummary();
   document.getElementById('run-summary').textContent = `Встреч: ${state.encounters} · Ветки: ${state.branches.join(' → ') || '—'}${state.preview ? ' · просмотр отдельного кадра' : ''}`;
   document.dispatchEvent(new CustomEvent('untorra:screenchange', { detail: { title: definition.title, image: `prototype/${id}`, noVignette: true } }));
   const duration = sceneVideo && Number.isFinite(sceneVideo.duration) ? sceneVideo.duration * 1000 : definition.duration;
-  clock.enter(state.reduced && id === '3c' ? 500 : duration);
+  clock.enter(duration);
   presentText(id);
   syncSuspension();
 }
@@ -558,6 +559,10 @@ function configuredRun(name = '') {
   state.reduced = reduced;
 }
 
+function updateFixtureSummary() {
+  document.getElementById('fixture-summary').textContent = `Локальные записи, не сервер. Бог: ${state.god.name} (${state.god.response === 'release' ? 'отпустит' : 'убьёт'}). ${state.visitor ? 'Гость: ' + state.visitor.name + ' · ' + (state.visitor.decision === 'take' ? 'YES' : 'NO') + '.' : ''}`;
+}
+
 function setVideoScene(id) {
   const next = sceneVideos.get(id) || null;
   for (const video of videos) {
@@ -597,7 +602,7 @@ function syncSuspension() {
     });
     else if (video.readyState >= 3) clock.resume('video');
   }
-  syncAnimations(sceneHost.getAnimations({ subtree: true }), contentSuspended);
+  syncSceneAnimations(sceneHost.getAnimations({ subtree: true }), { suspended, transitioning, waitingForGesture });
   syncAnimations(fadeOverlay.getAnimations(), suspended);
   audio.hidden = contentSuspended || !!videoScene;
   audio.update();
@@ -661,6 +666,13 @@ for (const plan of VISITOR_PLANS) {
   visitorsInput.appendChild(option);
 }
 godInput.value = state.god.id;
+godInput.addEventListener('change', () => {
+  if (!['1', '2'].includes(state.scene)) return;
+  const profile = GOD_PROFILES.find(profile => profile.id === godInput.value);
+  if (!profile) return;
+  state.god = profile;
+  updateFixtureSummary();
+});
 visitorsInput.value = state.plan.id;
 for (const scene of SCENES) {
   const option = document.createElement('option');
@@ -674,6 +686,7 @@ picker.addEventListener('change', () => {
   const id = picker.value;
   configuredRun(state.name);
   previewScene(state, id);
+  godInput.value = state.god.id;
   showScene(id);
 });
 tools.addEventListener('toggle', () => {
@@ -743,6 +756,7 @@ async function init() {
     if (document.hidden) clock.pause('hidden');
     const requested = query.get('screen');
     if (sceneById(requested)) previewScene(state, requested);
+    godInput.value = state.god.id;
     if (['1', '2'].includes(state.scene)) {
       waitingForGesture = true;
       startButton.hidden = false;

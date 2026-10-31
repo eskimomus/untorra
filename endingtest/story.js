@@ -14,10 +14,10 @@ export const VISITOR_PLANS = Object.freeze([
 
 export const isTripScene = id => ['7a', '15d', '15e'].includes(id);
 
-const CONTINUOUS_SCENES = new Set(['4a', '5a', '6a', '7a', '8a', '9a', '10a', '11a', '12a', '13a', '12d', '13d', '14d', '15d', '14e', '15e']);
+const CONTINUOUS_SCENES = new Set(['4a', '5a', '6a', '7a', '8a', '9a', '10a', '11a', '12a', '13a', '3c', '4c', '5c', '6c', '12d', '13d', '14d', '15d', '14e', '15e']);
 
 export function isSeamlessTransition(from, to, action) {
-  return (from === '2' && action === 'take' && to === '3a') || (CONTINUOUS_SCENES.has(from) && CONTINUOUS_SCENES.has(to));
+  return (from === '2' && ((action === 'take' && to === '3a') || (action === 'decline' && to === '3c'))) || (CONTINUOUS_SCENES.has(from) && CONTINUOUS_SCENES.has(to));
 }
 
 export const SCENES = Object.freeze([
@@ -39,7 +39,7 @@ export const SCENES = Object.freeze([
   { id: '4b', node: '92:348', title: 'B · The god let you go', tone: 'black', duration: 2400, next: '5b' },
   { id: '5b', node: '94:12', title: 'B · A sign of encouragement', tone: 'black', duration: 5000, next: '6b' },
   { id: '6b', node: '95:16', title: 'B · The god reveals their name', tone: 'black', duration: 4000, next: 'end' },
-  { id: '3c', node: '95:40', title: 'C · The god kills you', tone: 'red', duration: 240, next: '4c' },
+  { id: '3c', node: '95:40', title: 'C · The god kills you', tone: 'red', duration: 694, next: '4c' },
   { id: '4c', node: '92:366', title: 'C · The god did not let you go', tone: 'red', duration: 2400, next: '5c' },
   { id: '5c', node: '95:45', title: 'C · A sign of intimidation', tone: 'red', duration: 3600, next: '6c' },
   { id: '6c', node: '95:51', title: 'C · The god reveals their name', tone: 'red', duration: 4000, next: 'end' },
