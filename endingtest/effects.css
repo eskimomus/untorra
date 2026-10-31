@@ -1,0 +1,70 @@
+#stage.game-dither-enabled { filter: url("#game-dither-filter"); }
+#game { isolation: isolate; }
+#game-screen-noise-layer, #game > #fade-overlay {
+  position: absolute; inset: auto; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: min(100vw, 133.333vh); height: min(100vh, 75vw); pointer-events: none;
+}
+#game > #fade-overlay { z-index: 300; }
+#game-screen-noise-layer { z-index: 190; overflow: hidden; mix-blend-mode: soft-light; }
+#game-screen-noise-layer[hidden] { display: none; }
+.game-screen-noise-texture {
+  position: absolute; inset: -64px;
+  background: url('assets/effects/grain.svg') repeat;
+  will-change: transform; animation: game-screen-grain .1333333333s steps(1, end) infinite;
+}
+@keyframes game-screen-grain {
+  0% { transform: translate3d(0,0,0); }
+  12.5% { transform: translate3d(-31px,17px,0); }
+  25% { transform: translate3d(23px,-43px,0); }
+  37.5% { transform: translate3d(-47px,-29px,0); }
+  50% { transform: translate3d(13px,37px,0); }
+  62.5% { transform: translate3d(41px,-11px,0); }
+  75% { transform: translate3d(-19px,53px,0); }
+  87.5% { transform: translate3d(53px,29px,0); }
+}
+#game-crt-scanlines {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: min(100vw, 133.333vh); height: min(100vh, 75vw);
+  z-index: 200; pointer-events: none;
+  background: repeating-linear-gradient(to bottom,
+    transparent 0px, transparent 2px,
+    rgba(0,0,0,.5) 2.5px, rgba(0,0,0,.9) 3px,
+    rgba(0,0,0,.5) 3.5px, transparent 4px);
+}
+#game-crt-scanlines[hidden] { display: none; }
+#game-dither-toast {
+  position: fixed; left: 50%; bottom: 12px; transform: translateX(-50%);
+  z-index: 1000; pointer-events: none; opacity: 0;
+  padding: 6px 10px; color: #fff2e9; background: #15100de8;
+  font: 12px/1.4 ui-monospace, Menlo, monospace;
+  transition: opacity 150ms ease;
+}
+#game-dither-toast.show { opacity: 1; }
+
+
+/* Test controls stay outside the filtered stage so the slider remains clear. */
+#game-dither-controls {
+  position: fixed; right: 12px; bottom: 12px; z-index: 450;
+  width: min(300px, calc(100vw - 24px)); max-height: calc(100vh - 24px); overflow-y: auto; padding: 12px;
+  color: #e6e6ea; background: #16161af5; border: 1px solid #3a3a42;
+  font: 12px/1.5 ui-monospace, Menlo, monospace;
+}
+#game-dither-controls[hidden] { display: none; }
+.dither-controls-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.dither-controls-heading h2 { font: inherit; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+#game-dither-close { border: 0; background: none; color: #e6e6ea; font: inherit; font-size: 20px; line-height: 1; cursor: pointer; padding: 0 3px; }
+#game-dither-controls .dither-enabled { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+#game-dither-controls input { accent-color: #c77842; }
+.dither-mix-row { display: flex; align-items: center; gap: 8px; margin: 4px 0 10px; }
+#game-dither-controls input[type="range"] { flex: 1; min-width: 0; cursor: ew-resize; }
+#game-dither-controls input[type="number"] { width: 52px; padding: 3px; font: inherit; color: #e6e6ea; background: #0e0e11; border: 1px solid #3a3a42; }
+#game-dither-controls input:disabled { opacity: .4; cursor: default; }
+#game-dither-controls p { color: #9a9aa6; font-size: 10px; }
+
+.vignette-controls { border-top: 1px solid #3a3a42; padding-top: 10px; margin-top: 12px; }
+.vignette-controls h3 { font: inherit; }
+#game-dither-controls #vignette-screen-name { margin: 4px 0 10px; overflow-wrap: anywhere; }
+.vignette-actions { display: flex; gap: 6px; }
+.vignette-actions button { padding: 4px 6px; border: 1px solid #3a3a42; background: #24242b; color: #e6e6ea; font: inherit; font-size: 10px; cursor: pointer; }
+.vignette-actions button:disabled { opacity: .4; cursor: default; }
+

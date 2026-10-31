@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>UNTORRA · endings · local prototype</title>
+  <link rel="preload" href="assets/fonts/Quantico-Regular.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="effects.css?v=1">
+  <link rel="stylesheet" href="prototype.css?v=16">
+</head>
+<body>
+  <svg width="0" height="0" aria-hidden="true" style="position:absolute;pointer-events:none">
+    <defs><filter id="orb-alpha" x="0" y="0" width="100%" height="100%" color-interpolation-filters="sRGB"><feColorMatrix values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  -0.2126 -0.7152 -0.0722 0 1"/><feComposite in2="SourceAlpha" operator="in"/></filter></defs>
+  </svg>
+  <div id="game">
+    <main id="stage" aria-label="Untorra endings" aria-busy="true">
+      <div id="scene" data-screen="loading"></div>
+      <video id="trip-video" src="assets/video/first-trip-v1.mp4" poster="assets/video/first-trip-v1-poster.jpg" preload="auto" muted playsinline aria-hidden="true" hidden></video>
+      <video id="repeat-trip-video" src="assets/video/repeat-trip-v1.mp4" poster="assets/video/repeat-trip-v1-poster.jpg" preload="auto" muted playsinline aria-hidden="true" hidden></video>
+      <video id="kill-video" src="assets/video/kill.mp4" poster="assets/video/kill-poster.jpg" preload="auto" muted playsinline aria-hidden="true" hidden></video>
+      <video id="after-kill-video" src="assets/video/after-kill.mp4" poster="assets/video/after-kill-poster.jpg" preload="auto" muted playsinline aria-hidden="true" hidden></video>
+      <video id="god-death-video" src="assets/video/god-death-v1.mp4" poster="assets/video/god-death-v1-poster.jpg" preload="auto" muted playsinline aria-hidden="true" hidden></video>
+      <canvas id="psyche" width="320" height="240" aria-hidden="true" hidden></canvas>
+      <div id="vignette" hidden></div>
+      <div id="grain" hidden></div>
+    </main>
+    <div id="fade-overlay" aria-hidden="true" hidden></div>
+    <button id="start-ending" type="button" hidden>click to begin</button>
+  </div>
+  <details id="prototype-tools">
+    <summary>ENDINGS · LOCAL TEST</summary>
+    <div class="tools-body">
+      <p id="fixture-summary">Локальные тестовые записи, не сервер.</p>
+      <label for="god-profile">Реакция текущего бога на отказ</label>
+      <select id="god-profile" aria-label="Реакция бога на отказ"></select>
+      <label for="visitor-plan">Следующие гости</label>
+      <select id="visitor-plan" aria-label="Последовательность гостей"></select>
+      <p>Настройки применяются при «С начала» или выборе кадра. Выбор кадра запускает отдельный тест.</p>
+      <label for="scene-picker">Кадр</label>
+      <select id="scene-picker" aria-label="Кадр прототипа"></select>
+      <div class="tools-buttons">
+        <button id="restart" type="button">С начала</button>
+        <button id="next-scene" type="button">Пропустить ожидание</button>
+        <button id="export-decisions" type="button" disabled>JSON решений</button>
+      </div>
+      <label><input id="pause-story" type="checkbox"> Пауза автопереходов</label>
+      <label><input id="sound-enabled" type="checkbox" checked> Звук</label>
+      <label><input id="reduced-motion" type="checkbox"> Меньше вспышек и движения</label>
+      <p>Открытая панель ставит автопереходы на паузу. Закрой её, чтобы продолжить.</p>
+      <p>F8 — постобработка · Shift+F8 — её настройки.<br>Имя подтверждается Enter.</p>
+      <p id="run-summary">Встреч: 0 · Ветки: —</p>
+      <output id="prototype-status" aria-live="polite">Загрузка локальных ассетов…</output>
+    </div>
+  </details>
+  <p id="motion-notice">Локальный тест · яркие эффекты · настройки в ENDINGS · LOCAL TEST</p>
+  <noscript>Для локального прототипа нужен JavaScript.</noscript>
+  <script src="effects.js?v=1"></script>
+  <script type="module" src="prototype.js?v=21"></script>
+</body>
+</html>
