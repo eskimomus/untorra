@@ -1,7 +1,11 @@
-import { SCENES, GOD_PROFILES, VISITOR_PLANS, sceneById, cleanName, transitionFor, createRun, advanceRun, previewScene, decisionSnapshot, isTripScene, isSeamlessTransition, SceneClock } from './story.js?v=13';
-import { PsychedelicRenderer, EndingAudio } from './psychedelic.js?v=15';
-import { Sequence, TypingAudio, typingTokens, syncAnimations, syncSceneAnimations, echoRevealGroups, echoJitterFrames } from './text-presentation.js?v=9';
+import { SCENES, GOD_PROFILES, VISITOR_PLANS, NAME_MAX_LENGTH, limitNameInput, sceneById, cleanName, transitionFor, createRun, advanceRun, previewScene, decisionSnapshot, isTripScene, isSeamlessTransition, SceneClock } from './story.js?v=16';
+import { EndingRepository } from './online.js?v=3';
+import { ONLINE_API_BASE } from './online-config.js?v=1';
+import { PsychedelicRenderer, EndingAudio } from './psychedelic.js?v=18';
+import { Sequence, TypingAudio, typingTokens, syncAnimations, syncSceneAnimations, echoRevealGroups, echoJitterFrames } from './text-presentation.js?v=16';
 import { VideoCaption } from './video-presentation.js?v=4';
+import { alienInkColor, alienWords, concurrentTypingFrames, echoTranslationFrames, loadAlienGlyphAtlas } from './alien-text.js?v=10';
+import { getTextSettings, mountTextSettings } from './text-settings.js?v=3';
 
 const sceneHost = document.getElementById('scene');
 const game = document.getElementById('game');
@@ -28,17 +32,28 @@ const preferences = matchMedia('(prefers-reduced-motion: reduce)');
 const audio = new EndingAudio();
 const typingAudio = new TypingAudio();
 const presentation = new Sequence();
+const echoPresentations = new Set();
 const transition = new Sequence();
 const textModels = new WeakMap();
 const firstTripCaption = new VideoCaption();
 const godDeathCaption = new VideoCaption({ firstFrame: 60, lastFrame: 119 });
 const FADE_MS = 400;
 const query = new URLSearchParams(location.search);
+const embedded = query.get('embedded') === '1' && window.parent !== window;
+let hostPaused = embedded, hostRequestedPause = true, hostStarted = false, hostStarting = false, outputVolume = 1;
+let completionReported = false;
 let state = createRun();
+if (embedded) {
+  state = createRun({ godId: Math.random() < 0.5 ? 'merciful' : 'cruel' });
+  document.body.classList.add('embedded');
+  presentation.pause('host');
+}
 state.reduced = preferences.matches;
 const clock = new SceneClock(() => act('auto'));
+if (embedded) clock.pause('host');
 let renderer;
 let layout;
+let nameEntryResize = null;
 let nativeScale = 1;
 let ready = false;
 let videoScene = null;
@@ -48,6 +63,44 @@ let transitioning = false;
 let waitingForGesture = false;
 let starting = false;
 let screenShake = null;
+let postKillImage;
+let alienAtlas;
+let stillHandoff = 0;
+const repository = new EndingRepository({ baseUrl: ONLINE_API_BASE });
+
+function notifyHost(type, detail = {}) {
+  if (embedded) window.parent.postMessage({ source: 'untorra-ending', type, ...detail }, location.origin);
+}
+
+async function applyHostSettings(settings) {
+  hostRequestedPause = !!settings.paused;
+  if (!hostStarted) {
+    const profile = GOD_PROFILES.find(profile => profile.id === settings.godId);
+    const plan = VISITOR_PLANS.find(plan => plan.id === settings.visitorPlanId);
+    if (profile) { state.god = profile; godInput.value = profile.id; }
+    if (plan) { state.plan = plan; visitorsInput.value = plan.id; }
+  }
+  if (Number.isFinite(settings.volume)) {
+    outputVolume = Math.max(0, Math.min(1, settings.volume));
+    audio.volume = outputVolume;
+    typingAudio.setVolume(outputVolume);
+    for (const video of videos) video.volume = outputVolume;
+    audio.update();
+  }
+  if (ready && settings.start && !hostStarted && !hostStarting) {
+    hostStarting = true;
+    await unlockSound();
+    hostStarted = true;
+    hostStarting = false;
+  }
+  hostPaused = !hostStarted || hostRequestedPause;
+  if (ready) syncSuspension();
+}
+
+if (embedded) window.addEventListener('message', event => {
+  if (event.source !== window.parent || event.origin !== location.origin || event.data?.source !== 'untorra-game' || event.data.type !== 'settings') return;
+  applyHostSettings(event.data);
+});
 
 const assets = [
   'assets/figma/3a-imgUntorraBooklet3Copy21.png',
@@ -57,7 +110,7 @@ const assets = [
   'assets/video/after-kill-final-frame.png',
 ];
 
-function copy(text, left, top, { size = 16, color = '#fff', width, center = false, html = false, appearance = 'main', voice = 'player', atomicWords = [] } = {}) {
+function copy(text, left, top, { size = 16, color = '#fff', width, center = false, html = false, appearance = 'main', voice = 'player', atomicWords = [], translate = true } = {}) {
   const paragraph = document.createElement('p');
   paragraph.className = `copy${size === 24 ? ' thought' : ''}${center ? ' center-copy' : ''}`;
   paragraph.style.left = `${left}px`;
@@ -70,13 +123,17 @@ function copy(text, left, top, { size = 16, color = '#fff', width, center = fals
   paragraph.dataset.appearance = appearance;
   paragraph.dataset.voice = voice;
   paragraph.dataset.atomicWords = JSON.stringify(atomicWords);
+  paragraph.dataset.translation = translate ? 'alien' : 'human';
   layout.appendChild(paragraph);
   return paragraph;
 }
 
 function pixelize(paragraph) {
+  const textSettings = getTextSettings();
   const text = paragraph.textContent;
   const computed = getComputedStyle(paragraph);
+  const control = paragraph.closest('.scene-button');
+  if (control) control.style.setProperty('--control-ink', alienInkColor(computed.color, textSettings));
   const size = parseFloat(computed.fontSize);
   const spacing = size * 0.4;
   const measurement = document.createElement('canvas').getContext('2d');
@@ -117,26 +174,71 @@ function pixelize(paragraph) {
     for (const character of Array.from(line)) {
       let offset = sourceIndex;
       const segment = segments.find(part => { if (offset < part.text.length) return true; offset -= part.text.length; return false; });
-      glyphs.push({ character, horizontal, vertical: lineIndex * size * 1.324 + size * 0.99, color: segment?.color || computed.color, end: sourceIndex + character.length });
-      horizontal += measurement.measureText(character).width + spacing;
+      const measured = measurement.measureText(character);
+      const ink = {
+        left: -(measured.actualBoundingBoxLeft ?? 0),
+        width: (measured.actualBoundingBoxLeft ?? 0) + (measured.actualBoundingBoxRight ?? measured.width),
+        ascent: measured.actualBoundingBoxAscent ?? size * 0.75,
+        descent: measured.actualBoundingBoxDescent ?? 0,
+      };
+      glyphs.push({ character, horizontal, advance: measured.width, ink, vertical: lineIndex * size * 1.324 + size * 0.99, color: segment?.color || computed.color, end: sourceIndex + character.length });
+      horizontal += measured.width + spacing;
       sourceIndex += character.length;
     }
     sourceIndex += 1;
   }
   paragraph.setAttribute('aria-label', text);
   paragraph.replaceChildren(canvas);
+  const words = alienWords(text, glyphs, size);
+  const characters = glyphs.filter(glyph => /\S/u.test(glyph.character));
   const model = { text, visible: text.length, offsetX: 0, draw: null };
+  const drawGlyph = glyph => {
+    context.fillStyle = alienInkColor(glyph.color, textSettings);
+    context.fillText(glyph.character, glyph.horizontal + model.offsetX, glyph.vertical);
+  };
   const draw = (visible = model.visible) => {
     model.visible = visible;
     context.clearRect(0, 0, available, height);
     for (const glyph of glyphs) {
       if (glyph.end > visible) continue;
-      context.fillStyle = glyph.color;
-      context.fillText(glyph.character, glyph.horizontal + model.offsetX, glyph.vertical);
+      drawGlyph(glyph);
     }
+    paragraph.dataset.language = 'english';
+    paragraph.dataset.translatedWords = String(words.length);
     if (paragraph.dataset.visibleCharacters !== String(visible)) paragraph.dataset.visibleCharacters = String(visible);
   };
   model.draw = draw;
+  model.drawAlien = (visible = model.visible, translated = 0, revision = 0) => {
+    if (!alienAtlas || translated >= words.length) { draw(visible); return; }
+    model.visible = visible;
+    context.clearRect(0, 0, available, height);
+    for (const [index, word] of words.entries()) {
+      if (index < translated) {
+        for (const glyph of word.glyphs) if (glyph.end <= visible) drawGlyph(glyph);
+      } else {
+        alienAtlas.drawWord(context, text, word, { visible, revision: index === translated ? revision : 0, offsetX: model.offsetX, settings: textSettings });
+      }
+    }
+    paragraph.dataset.language = translated || revision ? 'translating' : 'alien';
+    paragraph.dataset.translatedWords = String(translated);
+    paragraph.dataset.visibleCharacters = String(visible);
+  };
+  model.drawDecoded = (visible, decoded = [], flickering = null, revision = 0) => {
+    const resolved = new Set(decoded);
+    model.visible = visible;
+    paragraph.dataset.decodedCharacters = String(resolved.size);
+    paragraph.dataset.decodedGlyphs = JSON.stringify(decoded);
+    if (!alienAtlas || resolved.size >= characters.length) { draw(visible); return; }
+    context.clearRect(0, 0, available, height);
+    for (const word of words) alienAtlas.drawWord(context, text, word, {
+      visible, decoded: resolved, flickering, revision, offsetX: model.offsetX, settings: textSettings,
+    });
+    for (const glyph of characters) if (glyph.end <= visible && resolved.has(glyph.end)) drawGlyph(glyph);
+    paragraph.dataset.language = resolved.size || revision ? 'translating' : 'alien';
+    paragraph.dataset.translatedWords = String(words.filter(word => word.glyphs.every(glyph => resolved.has(glyph.end))).length);
+    paragraph.dataset.visibleCharacters = String(visible);
+  };
+  model.drawEcho = (decoded = [], flickering = null, revision = 0) => model.drawDecoded(text.length, decoded, flickering, revision);
   textModels.set(paragraph, model);
   draw(text.length);
 }
@@ -150,34 +252,41 @@ function stopScreenShake(shake = screenShake) {
   game.dataset.shaking = 'false';
 }
 
-function playTypingToken(token) {
-  if (token.sound !== 'untorra') { if (token.sound) typingAudio.play(token.sound); return; }
+function playTextImpact(sound, strength, maximumDuration = Infinity) {
   let shake;
-  const voice = typingAudio.play('untorra', { onEnded: () => { if (shake) stopScreenShake(shake); } });
+  const voice = typingAudio.play(sound, { onEnded: () => { if (shake) stopScreenShake(shake); } });
   if (state.reduced) return;
   stopScreenShake();
-  const duration = voice?.duration || typingAudio.duration('untorra') || 0.5;
+  const duration = Math.min(maximumDuration, voice?.duration || typingAudio.duration(sound) || 0.5);
   shake = { frame: null, deadline: performance.now() + duration * 1000 };
   screenShake = shake;
   game.dataset.shaking = 'true';
   game.dataset.shakeDuration = String(duration);
+  game.dataset.shakeStrength = String(strength);
+  game.dataset.shakeSound = sound;
   const update = () => {
     if (screenShake !== shake) return;
-    if (!voice && performance.now() >= shake.deadline) { stopScreenShake(shake); return; }
-    game.style.setProperty('--screen-shake-x', `${Math.round((Math.random() - 0.5) * 6 * nativeScale)}px`);
-    game.style.setProperty('--screen-shake-y', `${Math.round((Math.random() - 0.5) * 6 * nativeScale)}px`);
+    if (performance.now() >= shake.deadline) { stopScreenShake(shake); return; }
+    game.style.setProperty('--screen-shake-x', `${Math.round((Math.random() - 0.5) * 2 * strength * nativeScale)}px`);
+    game.style.setProperty('--screen-shake-y', `${Math.round((Math.random() - 0.5) * 2 * strength * nativeScale)}px`);
     shake.frame = requestAnimationFrame(update);
   };
   update();
 }
 
+function playTypingToken(token) {
+  if (token.letterSound) playTextImpact(token.letterSound, 1, 0.12);
+  if (token.sound === 'untorra') playTextImpact('untorra', 3);
+  else if (token.sound) typingAudio.play(token.sound);
+}
+
 function postKillStill(target = layout) {
-  const image = document.createElement('img');
+  const image = document.createElement('canvas');
   image.className = 'post-kill-still';
-  image.src = 'assets/video/after-kill-final-frame.png';
-  image.alt = '';
   image.width = 640;
   image.height = 480;
+  image.setAttribute('aria-hidden', 'true');
+  image.getContext('2d').drawImage(postKillImage, 0, 0, 640, 480);
   target.appendChild(image);
 }
 
@@ -222,15 +331,20 @@ function face(frame) {
 
 function nameEchoes(threatening) {
   const name = state.god.name;
-  const measurement = document.createElement('canvas').getContext('2d');
-  measurement.font = '16px Quantico';
-  const measured = Array.from(name).reduce((sum, character) => sum + measurement.measureText(character).width + 6.4, -6.4);
-  const size = Math.min(16, 16 * 400 / Math.max(1, measured));
+  const size = fitTextSize(name, 16, 400);
   const colors = threatening
     ? ['#ed0000', '#db0000', '#bf0000', '#790000', '#000', '#790000', '#bf0000', '#db0000', '#ed0000']
     : ['#1a1a1a', '#2c2c2c', '#484848', '#7f7f7f', '#fff', '#7f7f7f', '#484848', '#2c2c2c', '#1a1a1a'];
   const positions = [167, 183, 198, 214, 230, 246, 262, 278, 294];
-  positions.forEach((top, index) => copy(name, 115, top, { size, color: colors[index], width: 410, center: true, appearance: index === 4 ? 'main' : 'echo', voice: 'god' }));
+  positions.forEach((top, index) => copy(name, 115, top, { size, color: colors[index], width: 410, center: true, appearance: index === 4 ? 'main' : 'echo', voice: 'god', atomicWords: index === 4 ? [name] : [] }));
+}
+
+function fitTextSize(text, size, width) {
+  const measurement = document.createElement('canvas').getContext('2d');
+  measurement.font = `${size}px Quantico`;
+  const spacing = size * 0.4;
+  const measured = Array.from(text).reduce((sum, character) => sum + measurement.measureText(character).width + spacing, -spacing);
+  return size * Math.min(1, width / Math.max(1, measured));
 }
 
 function buildScene(id) {
@@ -242,8 +356,14 @@ function buildScene(id) {
     copy('???who are you', 135, 256, { size: 24, color: '#1a1a1a', appearance: 'echo' });
     const label = copy('enter your name', 83, 359, { color: '#484848', appearance: 'control' });
     label.id = 'name-label';
+    label.classList.add('name-label');
+    label.style.left = 'var(--name-entry-inset)';
+    label.style.top = 'calc(-32px * var(--ending-text-scale))';
+    delete label.dataset.appearance;
     const form = document.createElement('form');
+    form.className = 'name-entry';
     form.dataset.appearance = 'control';
+    form.appendChild(label);
     const input = document.createElement('input');
     input.id = 'player-name';
     input.className = 'name-field';
@@ -252,30 +372,47 @@ function buildScene(id) {
     input.autocomplete = 'off';
     input.autocapitalize = 'off';
     input.spellcheck = false;
-    input.maxLength = 48;
+    input.maxLength = NAME_MAX_LENGTH * 2;
     input.required = true;
     input.disabled = true;
     input.enterKeyHint = 'go';
     input.setAttribute('aria-labelledby', label.id);
-    input.title = 'Enter your name, then press Enter';
+    input.title = `Up to ${NAME_MAX_LENGTH} characters. Press Enter to continue.`;
     input.value = state.name;
     form.appendChild(input);
     const mirror = document.createElement('p');
     mirror.className = 'copy name-field-text';
-    mirror.style.width = '474px';
     mirror.dataset.singleLine = 'true';
     mirror.setAttribute('aria-hidden', 'true');
     form.appendChild(mirror);
-    let renderedValue = null;
+    let renderedValue = null, renderedWidth = null;
     const updateMirror = () => {
-      if (renderedValue !== input.value) {
+      if (!input.isConnected || !input.clientWidth) return;
+      const fieldStyle = getComputedStyle(input);
+      const width = input.clientWidth - parseFloat(fieldStyle.paddingLeft) - parseFloat(fieldStyle.paddingRight);
+      if (!(width > 0)) return;
+      if (renderedValue !== input.value || renderedWidth !== width) {
+        form.style.setProperty('--name-entry-inset', `${parseFloat(fieldStyle.borderLeftWidth) + parseFloat(fieldStyle.paddingLeft)}px`);
+        const scale = parseFloat(getComputedStyle(document.body).getPropertyValue('--ending-text-scale'));
+        const size = fitTextSize(input.value, 16 * scale, width - 2);
+        input.style.fontSize = mirror.style.fontSize = `${size}px`;
+        input.style.letterSpacing = `${size * 0.4}px`;
+        mirror.style.width = `${width}px`;
         mirror.textContent = input.value;
         pixelize(mirror);
         renderedValue = input.value;
+        renderedWidth = width;
       }
       const model = textModels.get(mirror);
       model.offsetX = -input.scrollLeft;
       model.draw();
+    };
+    const enforceLimit = () => {
+      const limited = limitNameInput(input.value);
+      if (limited === input.value) return;
+      const caret = Math.min(input.selectionStart ?? limited.length, limited.length);
+      input.value = limited;
+      input.setSelectionRange(caret, caret);
     };
     form.addEventListener('submit', event => {
       event.preventDefault();
@@ -287,15 +424,19 @@ function buildScene(id) {
     });
     input.addEventListener('input', event => {
       input.setCustomValidity('');
+      if (!event.isComposing) enforceLimit();
       updateMirror();
       requestAnimationFrame(() => { if (input.isConnected) updateMirror(); });
       if (event.isComposing) return;
       if (audio.context?.state !== 'running') unlockSound();
       typingAudio.play('player');
     });
+    input.addEventListener('compositionend', () => { enforceLimit(); updateMirror(); });
     input.addEventListener('scroll', updateMirror);
     input.addEventListener('select', () => requestAnimationFrame(() => { if (input.isConnected) updateMirror(); }));
     layout.appendChild(form);
+    nameEntryResize = new ResizeObserver(updateMirror);
+    nameEntryResize.observe(form);
     updateMirror();
   } else if (id === '2') {
     copy('??have you come to', 126, 187, { size: 24, color: '#1a1a1a', appearance: 'echo' });
@@ -303,19 +444,22 @@ function buildScene(id) {
     copy('take <span style="color:#fff">UNTORRA</span> FROM ME?', 72, 222, { size: 24, color: '#c4c4c4', html: true, voice: 'god', atomicWords: ['UNTORRA'] });
     copy('MY UNTORRA??', 176, 240, { size: 24, color: '#464646', appearance: 'echo' });
     copy('!!!it’s MINE!!!!!!', 155, 259, { size: 24, color: '#1a1a1a', appearance: 'echo' });
-    copy('leave', 137, 359, { color: '#484848', appearance: 'control' });
-    copy('???', 450, 359, { color: '#484848', appearance: 'control' });
+    copy('leave', 137, 373, { color: '#484848', appearance: 'control' });
+    copy('???', 450, 373, { color: '#484848', appearance: 'control' });
     button('NO', 'no-button', 'decline');
     button('YES', 'yes-button', 'take');
   } else if (id === '4a') {
     postKillStill();
-    copy('the old god is dead', 192, 424, { color: '#f00' });
+    copy('the keeper is dead', 192, 424, { color: '#f00' });
   } else if (id === '5a') {
     postKillStill();
-    copy('you have become the new god', 205, 412, { color: '#f00', width: 229, center: true });
+    copy('you have become the new one', 205, 412, { color: '#f00', width: 229, center: true });
   } else if (id === '6a') {
     postKillStill();
-    copy('enjoy the endless', 128, 425, { color: '#f00', width: 346, center: true });
+    const caption = copy('enjoy the eternity', 320, 425, { color: '#f00', width: 346, center: true });
+    caption.style.transform = 'translate(-50%, 0)';
+  } else if (id === '6a-silence') {
+    postKillStill();
   } else if (isTripScene(id)) {
     if (id === '7a') {
       const caption = copy('enjoy UNTORRA', 320, 240, { color: '#f00', width: 229, center: true, appearance: 'timed' });
@@ -331,29 +475,32 @@ function buildScene(id) {
   } else if (['8a', '9a', '10a', '11a', '12d', '13d'].includes(id)) {
     orb(true);
     if (id === '9a') button('WHO ARE YOU?', 'light-button who-button', 'ask-name');
-    if (id === '10a') copy(`my name is ${state.visitor.name}`, 240, 312, { size: 13 });
+    if (id === '10a') {
+      const text = `my name is ${state.visitor.name}`;
+      copy(text, 90, 312, { size: fitTextSize(text, 13, 458), width: 460, center: true, translate: false });
+    }
     if (id === '11a') button('have you come to <span style="color:#f00">TAKE UNTORRA FROM ME?</span>', 'light-button claim-button', 'ask-claim', { html: true });
-    if (id === '12d') copy('no', 309, 312, { size: 13 });
+    if (id === '12d') copy('no', 309, 312, { size: 13, translate: false });
     if (id === '13d') {
       button('KILL HIM', 'light-button kill-button', 'kill');
       button('LET HIM GO', 'light-button release-button', 'release');
     }
   } else if (id === '12a') {
     face('12a');
-    copy('yes', 300, 394, { appearance: 'instant' });
+    copy('yes', 300, 394, { appearance: 'instant', translate: false });
   } else if (id === '13a') {
-    const caption = copy('you are no longer a god', 162, 229, { color: '#f00', appearance: 'timed' });
+    const caption = copy('you are no longer a keeper', 162, 229, { color: '#f00', appearance: 'timed' });
     caption.classList.add('god-death-caption');
     caption.style.opacity = '1';
     caption.hidden = true;
   } else if (id === '4b') {
-    copy('the god let you go', 197, 240);
+    copy('the keeper let you go', 197, 240);
   } else if (id === '5b') {
     copy('as a sign of encouragement\nor out of centuries-old loneliness,\nhe told you his name', 96, 209, { width: 488, center: true });
   } else if (id === '6b') {
     nameEchoes(false);
   } else if (id === '4c') {
-    copy('the god didn’t let you go', 151, 230, { color: '#000' });
+    copy('the keeper didn’t let you go', 151, 230, { color: '#000' });
   } else if (id === '5c') {
     copy('as a sign of intimidation\nhe told you his name', 136, 224, { color: '#000', width: 368, center: true });
   } else if (id === '6c') {
@@ -380,7 +527,27 @@ function fadeElements(elements, duration) {
   }
 }
 
+function startEchoTranslation(elements, revealDuration, settings) {
+  if (state.reduced) return;
+  for (const element of elements) {
+    const model = textModels.get(element);
+    const frames = echoTranslationFrames(model.text, { settings });
+    if (!frames.length) continue;
+    const sequence = new Sequence();
+    echoPresentations.add(sequence);
+    if (document.hidden || tools.open || pauseInput.checked || hostPaused || transitioning || waitingForGesture) sequence.pause('ui');
+    sequence.play([
+      { duration: revealDuration },
+      ...frames.map(frame => ({
+        duration: frame.duration,
+        run: () => { if (element.isConnected) model.drawEcho(frame.decoded, frame.flickering, frame.revision); },
+      })),
+    ], () => { echoPresentations.delete(sequence); });
+  }
+}
+
 function presentText(id) {
+  const settings = getTextSettings();
   if (id === '13a') {
     clock.resume('text');
     stage.dataset.presentation = 'ready';
@@ -392,32 +559,56 @@ function presentText(id) {
   const main = Array.from(layout.querySelectorAll('[data-appearance="main"]'));
   const echoes = Array.from(layout.querySelectorAll('[data-appearance="echo"]'));
   const controls = Array.from(layout.querySelectorAll('[data-appearance="control"]'));
-  if (!state.reduced) for (const element of echoes) {
-    const animation = element.animate(echoJitterFrames(Math.random, nativeScale), { duration: 800 + Math.random() * 400, iterations: Infinity });
+  if (!state.reduced && settings.echoShake > 0) for (const element of echoes) {
+    const animation = element.animate(echoJitterFrames(Math.random, nativeScale, settings), { duration: settings.echoMotion * (0.8 + Math.random() * 0.4), iterations: Infinity });
     animation.id = 'echo-jitter';
   }
-  const revealDuration = state.reduced ? 200 : 700;
-  const echoStagger = state.reduced ? 80 : 180;
+  const revealDuration = state.reduced ? Math.min(200, settings.revealFade) : settings.revealFade;
+  const echoStagger = state.reduced ? Math.min(80, settings.echoStagger) : settings.echoStagger;
   const departing = layout.querySelector('.departing-visitor');
   const departureDuration = state.reduced ? 200 : 1200;
   const steps = departing ? [{ duration: departureDuration, run: () => {
     departing.animate([{ opacity: 1 }, { opacity: 0 }], { duration: departureDuration, fill: 'both', easing: 'ease-in-out' });
-  } }] : [{ duration: 180 }];
+  } }] : [{ duration: settings.startPause }];
   for (const element of [...main, ...echoes, ...controls]) element.style.opacity = '0';
+  for (const element of echoes) {
+    const model = textModels.get(element);
+    if (state.reduced) model.draw(); else model.drawEcho();
+  }
   for (const control of controls) control.inert = true;
   for (const element of main) {
     const model = textModels.get(element);
-    model.draw(0);
+    const translate = !state.reduced && element.dataset.translation !== 'human';
+    if (translate) model.drawAlien(0); else model.draw(0);
     steps.push({ duration: 0, run: () => { element.style.opacity = '1'; } });
-    const tokens = typingTokens(model.text, { voice: element.dataset.voice, atomicWords: JSON.parse(element.dataset.atomicWords || '[]') });
-    for (const token of tokens) steps.push({
-      duration: token.duration,
-      run: () => {
-        model.draw(token.end);
-        playTypingToken(token);
-      },
-    });
-    steps.push({ duration: 180 });
+    const atomicWords = JSON.parse(element.dataset.atomicWords || '[]');
+    const tokens = typingTokens(model.text, { voice: element.dataset.voice, atomicWords, settings });
+    if (translate) {
+      for (const frame of concurrentTypingFrames(model.text, tokens, { atomicWords, voice: element.dataset.voice, settings })) steps.push({
+        duration: frame.duration,
+        run: () => {
+          stage.dataset.presentation = frame.type === 'typing' ? 'typing' : 'translating';
+          model.drawDecoded(frame.visible, frame.decoded, frame.flickering, frame.revision);
+          if (frame.sound || frame.letterSound) playTypingToken(frame);
+        },
+      });
+      steps.push({ duration: settings.decodeSettle, run: () => { model.draw(model.text.length); } });
+    } else {
+      for (const token of tokens) {
+        if (token.sound === 'untorra') {
+          let end = token.start;
+          for (const character of model.text.slice(token.start, token.end)) {
+            end += character.length;
+            const position = end;
+            steps.push({ duration: settings.untorraLetterInterval, run: () => {
+              model.draw(position);
+              if (/\S/u.test(character)) playTypingToken({ letterSound: 'untorra-type', sound: position === token.end ? 'untorra' : null });
+            } });
+          }
+        } else steps.push({ duration: token.duration, run: () => { model.draw(token.end); playTypingToken(token); } });
+      }
+      steps.push({ duration: 180 });
+    }
     if (element.dataset.holdMs) {
       steps.push({ duration: Number(element.dataset.holdMs), run: () => { stage.dataset.presentation = 'reading'; } });
       steps.push({ duration: revealDuration, run: () => {
@@ -437,6 +628,7 @@ function presentText(id) {
       steps.push({ duration: index === groups.length - 1 ? revealDuration + 100 : echoStagger, run: () => {
         stage.dataset.presentation = 'echoes';
         fadeElements(group, revealDuration);
+        startEchoTranslation(group, revealDuration, settings);
       } });
     });
   }
@@ -464,13 +656,18 @@ function presentText(id) {
 function showScene(id) {
   const definition = sceneById(id);
   if (!definition || !ready) return;
+  nameEntryResize?.disconnect();
+  nameEntryResize = null;
   firstTripCaption.cancel();
   godDeathCaption.cancel();
   stopScreenShake();
   presentation.cancel();
+  for (const sequence of echoPresentations) sequence.cancel();
+  echoPresentations.clear();
   typingAudio.stop();
   for (const animation of sceneHost.getAnimations({ subtree: true })) animation.cancel();
   state.scene = id;
+  document.body.style.setProperty('--ending-ink', getTextSettings().alienColor);
   sceneHost.dataset.screen = id;
   sceneHost.dataset.tone = definition.tone;
   stage.dataset.screen = id;
@@ -502,11 +699,17 @@ function showScene(id) {
   clock.enter(duration);
   presentText(id);
   syncSuspension();
+  notifyHost('scene', { scene: { id, title: definition.title, bypass: stage.dataset.animated === 'true' || stage.dataset.matchedStill === 'true' } });
+  if (embedded && id === 'end' && !completionReported) {
+    completionReported = true;
+    notifyHost('complete', { result: decisionSnapshot(state) });
+  }
 }
 
 function changeScene(action) {
   const destination = advanceRun(state, action);
   if (!destination) return;
+  repository.capture(decisionSnapshot(state));
   showScene(destination);
 }
 
@@ -555,17 +758,22 @@ function cancelTransition() {
 
 function configuredRun(name = '') {
   const reduced = state.reduced;
-  state = createRun({ godId: godInput.value, visitorPlanId: visitorsInput.value, name });
+  const cast = state.plan.id === 'archive' ? { god: state.god, visitors: state.plan.visitors } : state.god.source === 'server-record' ? { god: state.god, visitors: [] } : undefined;
+  state = createRun({ godId: godInput.value, visitorPlanId: visitorsInput.value, name, cast });
   state.reduced = reduced;
 }
 
 function updateFixtureSummary() {
-  document.getElementById('fixture-summary').textContent = `Локальные записи, не сервер. Бог: ${state.god.name} (${state.god.response === 'release' ? 'отпустит' : 'убьёт'}). ${state.visitor ? 'Гость: ' + state.visitor.name + ' · ' + (state.visitor.decision === 'take' ? 'YES' : 'NO') + '.' : ''}`;
+  document.getElementById('fixture-summary').textContent = `${state.plan.id === 'archive' || state.god.source === 'server-record' ? 'Записи из архива.' : 'Локальные резервные записи.'} Бог: ${state.god.name} (${state.god.response === 'release' ? 'отпустит' : 'убьёт'}). ${state.visitor ? 'Гость: ' + state.visitor.name + ' · ' + (state.visitor.decision === 'take' ? 'YES' : 'NO') + '.' : ''}`;
 }
 
 function setVideoScene(id) {
   const next = sceneVideos.get(id) || null;
+  const previous = sceneVideo;
+  const handoff = ++stillHandoff;
+  const retainLastFrame = previous === afterKillVideo && id === '4a' && !state.reduced;
   for (const video of videos) {
+    if (retainLastFrame && video === previous) continue;
     video.hidden = video !== next;
     if (id !== videoScene || video !== next) {
       video.pause();
@@ -575,13 +783,24 @@ function setVideoScene(id) {
   sceneVideo = next;
   videoScene = next ? id : null;
   if (next && !state.reduced) clock.pause('video'); else clock.resume('video');
+  if (retainLastFrame) requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (stillHandoff !== handoff) return;
+    previous.hidden = true;
+    previous.pause();
+    previous.currentTime = 0;
+  }));
 }
 
 function syncSuspension() {
-  const suspended = document.hidden || tools.open || pauseInput.checked;
+  const suspended = document.hidden || tools.open || pauseInput.checked || hostPaused;
+  if (hostPaused) { clock.pause('host'); presentation.pause('host'); }
+  else { clock.resume('host'); presentation.resume('host'); }
   const contentSuspended = suspended || transitioning || waitingForGesture;
   if (contentSuspended) renderer?.suspend(); else renderer?.resume();
   if (contentSuspended) presentation.pause('ui'); else presentation.resume('ui');
+  for (const sequence of echoPresentations) {
+    if (contentSuspended) sequence.pause('ui'); else sequence.resume('ui');
+  }
   if (suspended) transition.pause('ui'); else transition.resume('ui');
   typingAudio.setSuspended(contentSuspended, audio.enabled);
   if (contentSuspended || !audio.enabled) stopScreenShake();
@@ -627,6 +846,19 @@ async function startEnding() {
   clock.resume('gesture');
   syncSuspension();
 }
+
+mountTextSettings(tools, {
+  enabled: !embedded,
+  onReplay: () => {
+    if (!ready) return false;
+    const input = layout?.querySelector('.name-field');
+    if (input) state.name = input.value;
+    cancelTransition();
+    showScene(state.scene);
+    if (waitingForGesture) startEnding();
+    return true;
+  },
+});
 
 startButton.addEventListener('click', startEnding);
 stage.addEventListener('pointerdown', () => { if (videoScene) unlockSound(); });
@@ -733,6 +965,11 @@ document.addEventListener('visibilitychange', () => {
   syncSuspension();
 });
 document.addEventListener('keydown', event => {
+  if (embedded && !event.repeat && (event.key === 'Escape' || event.code === 'F8')) {
+    event.preventDefault();
+    if (event.code === 'F8') notifyHost('effects', { shiftKey: event.shiftKey });
+    return;
+  }
   if (waitingForGesture && !tools.open && ['Enter', ' '].includes(event.key)) { event.preventDefault(); startEnding(); return; }
   if (event.key === 'Escape' && tools.open) { tools.open = false; event.preventDefault(); }
 });
@@ -740,12 +977,22 @@ new ResizeObserver(resize).observe(stage);
 
 async function init() {
   try {
-    const portraits = await Promise.all(assets.map(async source => {
+    const castReady = repository.loadCast(state.runId);
+    const alienReady = loadAlienGlyphAtlas();
+    const [portraits, atlas] = await Promise.all([Promise.all(assets.map(async source => {
       const image = new Image();
       image.src = source;
       await image.decode();
       return image;
-    }));
+    })), alienReady]);
+    postKillImage = portraits[assets.indexOf('assets/video/after-kill-final-frame.png')];
+    alienAtlas = atlas;
+    const cast = await castReady;
+    if (cast) {
+      const reduced = state.reduced;
+      state = createRun({ runId: state.runId, godId: state.god.id, cast });
+      state.reduced = reduced;
+    }
     await document.fonts.load('24px Quantico');
     await document.fonts.ready;
     renderer = new PsychedelicRenderer(document.getElementById('psyche'), portraits[0]);
@@ -754,10 +1001,10 @@ async function init() {
     if (query.get('hold') === '1') { pauseInput.checked = true; clock.pause('manual'); }
     if (tools.open) clock.pause('tools');
     if (document.hidden) clock.pause('hidden');
-    const requested = query.get('screen');
+    const requested = embedded ? null : query.get('screen');
     if (sceneById(requested)) previewScene(state, requested);
     godInput.value = state.god.id;
-    if (['1', '2'].includes(state.scene)) {
+    if (!embedded && ['1', '2'].includes(state.scene)) {
       waitingForGesture = true;
       startButton.hidden = false;
       clock.pause('gesture');
@@ -765,10 +1012,12 @@ async function init() {
     }
     showScene(state.scene);
     document.body.classList.add('ready');
+    notifyHost('ready');
   } catch (error) {
     tools.open = true;
     stage.setAttribute('aria-busy', 'false');
     status.textContent = 'Не удалось загрузить локальные ассеты. Обнови страницу. ' + error.message;
+    notifyHost('error');
   }
 }
 

@@ -3,6 +3,7 @@
  */
 (() => {
   'use strict';
+  if (new URLSearchParams(location.search).get('embedded') === '1' && window.parent !== window) return;
   const IS_SAFARI = /Version\/[\d.]+.*Safari\//.test(navigator.userAgent) && !/Chrome|Chromium|CriOS|FxiOS|Edg|OPR|OPiOS|Android/.test(navigator.userAgent);
   const STORE = IS_SAFARI ? 'untorra-ending-a-full-dither-safari' : 'untorra-ending-a-full-dither-test';
   const MIX_STORE = 'untorra-ending-a-full-dither-mix';

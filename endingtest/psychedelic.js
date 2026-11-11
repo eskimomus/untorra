@@ -1,4 +1,4 @@
-import { isTripScene } from './story.js?v=13';
+import { isTripScene } from './story.js?v=16';
 
 const VERTEX_SOURCE = `
 attribute vec2 position;
@@ -271,6 +271,7 @@ export class PsychedelicRenderer {
 export class EndingAudio {
   constructor() {
     this.enabled = true;
+    this.volume = 1;
     this.scene = '1';
     this.hidden = false;
     this.loading = null;
@@ -323,7 +324,7 @@ export class EndingAudio {
     const violent = ['3a', '3c', '13a', '14d'].includes(this.scene);
     const trip = isTripScene(this.scene);
     this.master.gain.cancelScheduledValues(now);
-    this.master.gain.setTargetAtTime(audible ? 0.24 : 0, now, violent ? 0.01 : 0.2);
+    this.master.gain.setTargetAtTime(audible ? 0.24 * this.volume : 0, now, violent ? 0.01 : 0.2);
     this.noiseGain.gain.setTargetAtTime(violent ? 0.7 : trip ? 0.17 : 0.08, now, 0.03);
     this.toneGain.gain.setTargetAtTime(trip ? 0.045 : 0, now, 0.25);
   }

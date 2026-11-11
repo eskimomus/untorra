@@ -1,4 +1,5 @@
-import { SceneClock } from './story.js?v=13';
+import { SceneClock } from './story.js?v=16';
+import { getTextSettings } from './text-settings.js?v=3';
 
 export function syncAnimations(animations, paused) {
   for (const animation of animations) {
@@ -26,11 +27,11 @@ export function echoRevealGroups(mainPositions, echoPositions) {
   return groups.map(group => group.indices);
 }
 
-export function echoJitterFrames(random = Math.random, scale = 1) {
-  return Array.from({ length: 20 }, () => ({ transform: `translate(${Math.round((random() - 0.5) * 2) / scale}px, ${Math.round((random() - 0.5) * 2) / scale}px)`, easing: 'steps(1, end)' }));
+export function echoJitterFrames(random = Math.random, scale = 1, settings = getTextSettings()) {
+  return Array.from({ length: 20 }, () => ({ transform: `translate(${Math.round((random() - 0.5) * 2) * settings.echoShake / scale}px, ${Math.round((random() - 0.5) * 2) * settings.echoShake / scale}px)`, easing: 'steps(1, end)' }));
 }
 
-export function typingTokens(text, { atomicWords = [], voice = 'player', random = Math.random } = {}) {
+export function typingTokens(text, { atomicWords = [], voice = 'player', random = Math.random, settings = getTextSettings() } = {}) {
   const tokens = [];
   let offset = 0;
   while (offset < text.length) {
@@ -40,11 +41,11 @@ export function typingTokens(text, { atomicWords = [], voice = 'player', random 
     const character = atomic || String.fromCodePoint(text.codePointAt(offset));
     const start = offset;
     offset += character.length;
-    let duration = 30 + random() * 75;
-    if (random() < 0.15) duration += 70 + random() * 140;
-    if (/\s/u.test(character)) duration += 35;
-    if (/[,.?!:;]/u.test(character)) duration += 120 + random() * 170;
-    if (atomic) duration = 420;
+    let duration = settings.letterDelay + random() * settings.letterJitter;
+    if (random() < settings.hesitationChance / 100) duration += settings.hesitationPause + random() * settings.hesitationJitter;
+    if (/\s/u.test(character)) duration += settings.wordPause + random() * settings.wordPauseJitter;
+    if (/[,.?!:;]/u.test(character)) duration += settings.punctuationPause + random() * settings.punctuationJitter;
+    if (atomic) duration = settings.atomicPause;
     tokens.push({ start, end: offset, sound: atomic ? 'untorra' : /\S/u.test(character) ? voice : null, duration });
   }
   return tokens;
@@ -94,9 +95,10 @@ export class TypingAudio {
   constructor() {
     this.enabled = true;
     this.suspended = false;
+    this.volume = 1;
     this.voices = new Set();
     this.bytes = Promise.all([
-      ['god', 'type-god.wav'], ['player', 'type-player.wav'], ['untorra', 'untorra.wav'],
+      ['god', 'type-god.wav'], ['player', 'type-player.wav'], ['untorra', 'untorra.wav'], ['untorra-type', 'untorra-type.ogg'],
     ].map(async ([name, file]) => {
       const response = await fetch(`assets/audio/${file}`);
       if (!response.ok) throw new Error(`Audio unavailable: ${file}`);
@@ -109,7 +111,7 @@ export class TypingAudio {
     if (!this.loading) {
       this.context = context;
       this.gain = context.createGain();
-      this.gain.gain.value = 0.7;
+      this.gain.gain.value = 0.7 * this.volume;
       this.gain.connect(context.destination);
       this.loading = this.bytes.then(entries => Promise.all(entries.map(async ([name, bytes]) => [name, await context.decodeAudioData(bytes)])))
         .then(entries => { this.buffers = new Map(entries); })
@@ -119,6 +121,11 @@ export class TypingAudio {
   }
 
   duration(name) { return this.buffers?.get(name)?.duration ?? 0; }
+
+  setVolume(value) {
+    this.volume = Math.max(0, Math.min(1, value));
+    if (this.gain) this.gain.gain.setTargetAtTime(0.7 * this.volume, this.context.currentTime, 0.03);
+  }
 
   play(name, { onEnded } = {}) {
     if (!this.enabled || this.suspended || this.context?.state !== 'running') return;

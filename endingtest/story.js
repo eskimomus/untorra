@@ -14,7 +14,7 @@ export const VISITOR_PLANS = Object.freeze([
 
 export const isTripScene = id => ['7a', '15d', '15e'].includes(id);
 
-const CONTINUOUS_SCENES = new Set(['4a', '5a', '6a', '7a', '8a', '9a', '10a', '11a', '12a', '13a', '3c', '4c', '5c', '6c', '12d', '13d', '14d', '15d', '14e', '15e']);
+const CONTINUOUS_SCENES = new Set(['3a-after', '4a', '5a', '6a', '6a-silence', '7a', '8a', '9a', '10a', '11a', '12a', '13a', '3c', '4c', '5c', '6c', '12d', '13d', '14d', '15d', '14e', '15e']);
 
 export function isSeamlessTransition(from, to, action) {
   return (from === '2' && ((action === 'take' && to === '3a') || (action === 'decline' && to === '3c'))) || (CONTINUOUS_SCENES.has(from) && CONTINUOUS_SCENES.has(to));
@@ -23,26 +23,27 @@ export function isSeamlessTransition(from, to, action) {
 export const SCENES = Object.freeze([
   { id: '1', node: '91:2', title: 'WHO ARE YOU', tone: 'black' },
   { id: '2', node: '91:27', title: 'TAKE UNTORRA FROM ME?', tone: 'black' },
-  { id: '3a', node: '91:117', title: 'Old god dies', tone: 'red', duration: 694, next: '3a-after' },
+  { id: '3a', node: '91:117', title: 'Keeper dies', tone: 'red', duration: 694, next: '3a-after' },
   { id: '3a-after', title: 'After the killing', tone: 'white', duration: 6507, next: '4a' },
-  { id: '4a', node: '91:168', title: 'The old god is dead', tone: 'white', duration: 2000, next: '5a' },
-  { id: '5a', node: '92:213', title: 'You have become the new god', tone: 'white', duration: 2400, next: '6a' },
-  { id: '6a', node: '92:380', title: 'Enjoy the endless', tone: 'white', duration: 1800, next: '7a' },
+  { id: '4a', node: '91:168', title: 'The keeper is dead', tone: 'white', duration: 2000, next: '5a' },
+  { id: '5a', node: '92:213', title: 'You have become the new one', tone: 'white', duration: 2400, next: '6a' },
+  { id: '6a', node: '92:380', title: 'Enjoy the eternity', tone: 'white', duration: 1800, next: '6a-silence' },
+  { id: '6a-silence', title: 'The empty circle', tone: 'white', duration: 2000, next: '7a' },
   { id: '7a', node: '92:327', title: 'Enjoy UNTORRA', tone: 'white', duration: 74709, next: '8a' },
   { id: '8a', node: '92:396', title: 'Someone is here', tone: 'white', duration: 1600, next: '9a' },
   { id: '9a', node: '92:271', title: 'Ask WHO ARE YOU?', tone: 'white' },
   { id: '10a', node: '92:283', title: 'Visitor introduces themselves', tone: 'white', duration: 2400, next: '11a' },
   { id: '11a', node: '92:292', title: 'Ask TAKE UNTORRA FROM ME?', tone: 'white' },
   { id: '12a', node: '91:106', title: 'Yes', tone: 'black', duration: 2000, next: '13a' },
-  { id: '13a', node: '91:112', title: 'You are no longer a god', tone: 'red', duration: 4000, next: 'end' },
+  { id: '13a', node: '91:112', title: 'You are no longer a keeper', tone: 'red', duration: 4000, next: 'end' },
   { id: '3b', node: '95:36', title: 'B · Silence after refusal', tone: 'black', duration: 750, next: '4b' },
-  { id: '4b', node: '92:348', title: 'B · The god let you go', tone: 'black', duration: 2400, next: '5b' },
+  { id: '4b', node: '92:348', title: 'B · The keeper let you go', tone: 'black', duration: 2400, next: '5b' },
   { id: '5b', node: '94:12', title: 'B · A sign of encouragement', tone: 'black', duration: 5000, next: '6b' },
-  { id: '6b', node: '95:16', title: 'B · The god reveals their name', tone: 'black', duration: 4000, next: 'end' },
-  { id: '3c', node: '95:40', title: 'C · The god kills you', tone: 'red', duration: 694, next: '4c' },
-  { id: '4c', node: '92:366', title: 'C · The god did not let you go', tone: 'red', duration: 2400, next: '5c' },
+  { id: '6b', node: '95:16', title: 'B · The keeper reveals their name', tone: 'black', duration: 4000, next: 'end' },
+  { id: '3c', node: '95:40', title: 'C · The keeper kills you', tone: 'red', duration: 694, next: '4c' },
+  { id: '4c', node: '92:366', title: 'C · The keeper did not let you go', tone: 'red', duration: 2400, next: '5c' },
   { id: '5c', node: '95:45', title: 'C · A sign of intimidation', tone: 'red', duration: 3600, next: '6c' },
-  { id: '6c', node: '95:51', title: 'C · The god reveals their name', tone: 'red', duration: 4000, next: 'end' },
+  { id: '6c', node: '95:51', title: 'C · The keeper reveals their name', tone: 'red', duration: 4000, next: 'end' },
   { id: '12d', node: '92:301', title: 'The visitor refuses', tone: 'white', duration: 1800, next: '13d' },
   { id: '13d', node: '92:309', title: 'Release or kill the visitor', tone: 'white' },
   { id: '14d', node: '92:322', title: 'E · You killed the visitor', tone: 'red', duration: 694, next: '15d' },
@@ -54,8 +55,14 @@ export const SCENES = Object.freeze([
 
 export const sceneById = id => SCENES.find(scene => scene.id === id);
 
+export const NAME_MAX_LENGTH = 24;
+
+export function limitNameInput(value) {
+  return Array.from(String(value)).slice(0, NAME_MAX_LENGTH).join('');
+}
+
 export function cleanName(value) {
-  return Array.from(String(value).normalize('NFC').replace(/[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '').trim()).slice(0, 24).join('');
+  return limitNameInput(String(value).normalize('NFC').replace(/[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '').trim());
 }
 
 export function transitionFor(id, action, state = {}) {
@@ -70,9 +77,9 @@ export function transitionFor(id, action, state = {}) {
   return null;
 }
 
-export function createRun({ godId = 'merciful', visitorPlanId = 'mixed', name = '', runId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` } = {}) {
-  const god = GOD_PROFILES.find(profile => profile.id === godId) ?? GOD_PROFILES[0];
-  const plan = VISITOR_PLANS.find(profile => profile.id === visitorPlanId) ?? VISITOR_PLANS[1];
+export function createRun({ godId = 'merciful', visitorPlanId = 'mixed', name = '', runId = globalThis.crypto?.randomUUID?.() ?? `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, cast } = {}) {
+  const god = cast?.god ?? GOD_PROFILES.find(profile => profile.id === godId) ?? GOD_PROFILES[0];
+  const plan = cast?.visitors?.length ? { id: 'archive', visitors: cast.visitors } : VISITOR_PLANS.find(profile => profile.id === visitorPlanId) ?? VISITOR_PLANS[1];
   return { runId, scene: '1', name: cleanName(name), god, plan, visitor: null, visitorIndex: -1, encounters: 0, isGod: false, outcome: null, branches: [], decisions: [], preview: false };
 }
 
@@ -86,7 +93,8 @@ function playerActor(state) {
 
 function receiveVisitor(state) {
   state.visitorIndex += 1;
-  state.visitor = state.plan.visitors[Math.min(state.visitorIndex, state.plan.visitors.length - 1)];
+  const index = state.plan.id === 'archive' ? state.visitorIndex % state.plan.visitors.length : Math.min(state.visitorIndex, state.plan.visitors.length - 1);
+  state.visitor = state.plan.visitors[index];
   state.encounters += 1;
 }
 
@@ -127,9 +135,11 @@ export function previewScene(state, id) {
   state.preview = true;
   state.scene = id;
   if (id !== '1' && !state.name) state.name = 'you';
-  if (/^[3-6]b$/.test(id)) state.god = GOD_PROFILES[0];
-  if (/^[3-6]c$/.test(id)) state.god = GOD_PROFILES[1];
-  state.isGod = ['3a', '3a-after', '4a', '5a', '6a', '7a', '8a', '9a', '10a', '11a', '12a', '12d', '13d', '14d', '14e', '15d', '15e'].includes(id);
+  if (state.god.source !== 'server-record') {
+    if (/^[3-6]b$/.test(id)) state.god = GOD_PROFILES[0];
+    if (/^[3-6]c$/.test(id)) state.god = GOD_PROFILES[1];
+  }
+  state.isGod = ['3a', '3a-after', '4a', '5a', '6a', '6a-silence', '7a', '8a', '9a', '10a', '11a', '12a', '12d', '13d', '14d', '14e', '15d', '15e'].includes(id);
   if (['8a', '9a', '10a', '11a', '12a', '13a', '12d', '13d', '14d', '14e', '15d', '15e'].includes(id)) {
     const forced = ['12a', '13a'].includes(id) ? 'take' : ['12d', '13d', '14d', '14e', '15d', '15e'].includes(id) ? 'decline' : null;
     state.visitorIndex = Math.max(0, state.plan.visitors.findIndex(profile => !forced || profile.decision === forced));
@@ -142,7 +152,7 @@ export function previewScene(state, id) {
 }
 
 export function decisionSnapshot(state) {
-  return JSON.parse(JSON.stringify({ version: 1, mode: 'local-prototype', preview: state.preview, runId: state.runId, player: playerActor(state), god: state.god, visitorPlan: state.plan.id, outcome: state.outcome, branches: state.branches, decisions: state.decisions }));
+  return JSON.parse(JSON.stringify({ version: 1, mode: state.plan.id === 'archive' || state.god.source === 'server-record' ? 'archive' : 'local-prototype', preview: state.preview, runId: state.runId, player: playerActor(state), god: state.god, visitorPlan: state.plan.id, outcome: state.outcome, branches: state.branches, decisions: state.decisions }));
 }
 
 export class SceneClock {
